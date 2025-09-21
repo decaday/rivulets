@@ -7,10 +7,23 @@
 /// flowing through it.
 pub trait Info: core::fmt::Debug + Clone + Copy + PartialEq + Eq {
     // fn is_compatible_with(&self, other: &Self) -> bool;
+    fn vaild(&self) -> bool {
+        true
+    }
+
+    fn get_alignment_bytes(&self) -> u8;
 }
 
 /// A default, empty Info struct for pipelines that do not need metadata.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EmptyInfo;
 
-impl Info for EmptyInfo {}
+impl Info for EmptyInfo {
+    fn vaild(&self) -> bool {
+        true
+    }
+
+    fn get_alignment_bytes(&self) -> u8 {
+        1
+    }
+}

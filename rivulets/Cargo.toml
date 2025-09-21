@@ -1,0 +1,55 @@
+[package]
+name = "rivulets"
+version = "0.0.0"
+edition = "2021"
+authors = ["Decaday <myDecaday@outlook.com>"]
+repository = "https://github.com/decaday/rivulets"
+documentation = "https://docs.rs/rivulets"
+homepage = "https://github.com/decaday/rivulets"
+categories = ["embedded", "no-std"]
+description = "Embedded dataflow framework"
+readme = "../README.md"
+license = "Apache-2.0"
+
+[dependencies]
+# rivulets-driver = { version = "0.0.0" }
+rivulets-driver = { version = "0.0.0", path = "../rivulets-driver" }
+
+# ringbuffer = "0.15.0"
+embedded-io = "0.6"
+ringbuf = { version = "0.4.7", default-features = false }
+async-ringbuf = { version = "0.3", default-features = false }
+cfg-if = {version = "1.0.1", features = ["core"]}
+embassy-sync = { version = "0.7.0" }
+# embassy-time = { version = "0.3.2" }
+
+defmt = { version = "1", optional = true }
+log = { version = "0.4.27", default-features = false, optional = true }
+
+libm = "0.2.15"
+
+[dev-dependencies]
+embedded-io-adapters = { version = "0.6" }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "full"] }
+critical-section = { version = "1.2.0" }
+
+[features]
+defmt = ["dep:defmt", "embassy-sync/defmt"]
+log = ["dep:log", "embassy-sync/log"]
+
+std = [
+    "alloc",
+    "embedded-io/std", 
+    "rivulets-driver/std", 
+    # "embassy-time/std",
+    "embassy-sync/std",
+    "ringbuf/std",
+    "async-ringbuf/std",
+    "log",
+
+    # dev-deps
+    "embedded-io-adapters/std",
+    "critical-section/std",
+]
+
+alloc = ["ringbuf/alloc", "async-ringbuf/alloc"]

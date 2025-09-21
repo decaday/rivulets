@@ -17,6 +17,12 @@ impl InPort<'_, Dmy> {
     }
 }
 
+impl Default for InPort<'_, Dmy> {
+    fn default() -> Self {
+        InPort::None
+    }
+}
+
 /// Represents an output port for an `Element`.
 ///
 /// An `Element` can send data to a `Producer`, which accepts data payloads.
@@ -29,6 +35,12 @@ pub enum OutPort<'a, P: Producer<'a>> {
 
 impl OutPort<'_, Dmy> {
     pub fn new_none() -> Self {
+        OutPort::None
+    }
+}
+
+impl Default for OutPort<'_, Dmy> {
+    fn default() -> Self {
         OutPort::None
     }
 }
@@ -50,6 +62,11 @@ impl InPlacePort<'_, Dmy> {
     }
 }
 
+impl Default for InPlacePort<'_, Dmy> {
+    fn default() -> Self {
+        InPlacePort::None
+    }
+}
 
 /// The data transfer requirements for an `Element`'s port.
 /// Specifies the minimum required payload size for each port type.

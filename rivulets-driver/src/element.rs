@@ -35,7 +35,10 @@ pub trait Element {
     async fn initialize(
         &mut self,
         upstream_info: Option<Self::Info>,
-    ) -> Result<PortRequirements, Self::Error>;
+    ) -> Result<PortRequirements, Self::Error> {
+        let _ = upstream_info;
+        Ok(self.get_port_requirements())
+    }
 
 
     /// Flushes any internal buffers of the element.
@@ -65,6 +68,7 @@ pub trait Element {
 }
 
 /// Represents the status of a `process` call.
+#[derive(Debug, PartialEq, Eq)]
 pub enum ProcessStatus {
     /// The processing step completed successfully, and more data may follow.
     Fine,

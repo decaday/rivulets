@@ -7,15 +7,6 @@ pub mod info;
 pub mod databus;
 pub mod payload;
 
-cfg_if::cfg_if! {
-    if #[cfg(feature = "std")] {
-        pub use std::sync::Mutex;
-        pub use std::sync::MutexGuard;
-    } else {
-        pub type Mutex<T> = embassy_sync::blocking_mutex::CriticalSectionMutex<T>;
-    }
-}
-
 #[derive(Debug)]
 pub enum Error {
     /// Invalid parameters provided.

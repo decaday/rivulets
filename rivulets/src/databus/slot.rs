@@ -5,8 +5,8 @@ use core::task::Poll;
 
 use embassy_sync::waitqueue::AtomicWaker;
 
-use embedded_audio_driver::databus::{Consumer, Producer, Transformer};
-use embedded_audio_driver::payload::{Metadata, ReadPayload, TransformPayload, WritePayload};
+use rivulets_driver::databus::{Consumer, Producer, Transformer};
+use rivulets_driver::payload::{Metadata, ReadPayload, TransformPayload, WritePayload};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]

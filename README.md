@@ -7,3 +7,9 @@
 > ⚠️ **Warning: Early Development**
 > 
 > This project is in its early stages of development and is currently **NOT USABLE**. 
+
+A lightweight, asynchronous, `no_std`-compatible dataflow framework for building elegant data processing pipelines.
+
+Crates using `rivulets`:
+ - [embedded-audio](https://github.com/decaday/embedded-audio)
+
