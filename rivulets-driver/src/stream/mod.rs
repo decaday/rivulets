@@ -1,8 +1,5 @@
 use crate::element::Element;
 
-// pub mod i2s;
-// pub mod dac;
-
 /// Stream errors
 #[derive(Debug)]
 pub enum Error {

@@ -1,0 +1,21 @@
+[package]
+name = "rivulets-driver"
+version = "0.0.0"
+edition = "2021"
+authors = ["Decaday <myDecaday@outlook.com>"]
+repository = "https://github.com/decaday/rivulets"
+documentation = "https://docs.rs/rivulets-driver"
+homepage = "https://github.com/decaday/rivulets"
+categories = ["embedded", "no-std", "hardware-support"]
+description = "`rivulets` interface crate"
+readme = "README.md"
+license = "Apache-2.0"
+
+[dependencies]
+embedded-io = "0.6"
+cfg-if = { version = "1.0.1", features = ["core"] }
+# bitfield-struct = "0.11.0"
+# embassy-sync = { version = "0.7.0" }
+
+[features]
+std = ["embedded-io/std"]

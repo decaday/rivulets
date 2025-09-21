@@ -1,61 +1,44 @@
-use embedded_io::{Read, Seek, Write};
-
-// Use statements to import all necessary types at the top.
 use crate::databus::{Consumer, Producer, Transformer};
 use crate::info::Info;
-use crate::port::{Dmy, InPlacePort, InPort, OutPort, PortRequirements};
+use crate::port::{InPlacePort, InPort, OutPort, PortRequirements};
 
-/// The core trait for any audio processing unit in the pipeline.
+/// The core trait for any data processing unit in the pipeline.
 ///
-/// An `Element` can be a source (generator), a sink (encoder, output stream),
-/// or a transformation (filter, gain). It processes data by receiving it from
+/// An `Element` can be a source (generator), a sink (writer),
+/// or a transformation (filter). It processes data by receiving it from
 /// an `InPort` and sending it to an `OutPort`.
 #[allow(async_fn_in_trait)]
 pub trait Element {
-    // TODO
+    /// The type of metadata associated with the data stream.
+    type Info: Info;
+    /// The error type for this element's operations.
     type Error;
 
-    /// Returns the audio format information expected at the input.
+    /// Returns the metadata expected at the input.
     /// Returns `None` if this is a source element.
-    fn get_in_info(&self) -> Option<Info>;
+    fn get_in_info(&self) -> Option<Self::Info>;
 
-    /// Returns the audio format information produced at the output.
+    /// Returns the metadata produced at the output.
     /// Returns `None` if this is a sink element.
-    fn get_out_info(&self) -> Option<Info>;
+    fn get_out_info(&self) -> Option<Self::Info>;
 
-    /// Could be called before `initialize`
-    fn need_writer(&self) -> bool {
-        false
-    }
-    /// Could be called before `initialize`
-    fn need_reader(&self) -> bool {
-        false
-    }
-
-    /// MUST be called after `initialize`
+    /// Returns the data transfer requirements for the element's ports.
+    /// This MUST be callable after `initialize`.
     fn get_port_requirements(&self) -> PortRequirements;
 
     /// Returns the amount of available data for processing.
     /// The unit (e.g., bytes, frames) depends on the element's nature.
     fn available(&self) -> u32;
 
-    async fn initialize<'a, R, W>(
+    /// Initializes the element based on metadata from the upstream element.
+    /// Returns its own port requirements upon successful initialization.
+    async fn initialize(
         &mut self,
-        in_port: &mut InPort<'a, R, Dmy>,
-        out_port: &mut OutPort<'a, W, Dmy>,
-        upstream_info: Option<Info>,
-    ) -> Result<PortRequirements, Self::Error>
-    where
-        R: Read + Seek,
-        W: Write + Seek
-    {
-        let _ = in_port;
-        let _ = out_port;
-        let _ = upstream_info;
-        Ok(self.get_port_requirements())
-    }
+        upstream_info: Option<Self::Info>,
+    ) -> Result<PortRequirements, Self::Error>;
 
-    /// Flushes any internal buffers
+
+    /// Flushes any internal buffers of the element.
     async fn flush(&mut self) -> Result<(), Self::Error> {
         Ok(())
     }
@@ -67,30 +50,15 @@ pub trait Element {
 
     /// The main asynchronous processing function.
     ///
-    /// It takes an `InPort` and an `OutPort` and performs one step of data
-    /// processing. The implementation will match on the port types to handle
-    /// different kinds of connections (IO-based or databus-based).
-    ///
-    /// # In-Place Transformation (Zero-Copy)
-    ///
-    /// To perform an in-place transformation, an `Element`'s `process` method
-    /// should be called with its `InPort::Consumer` and `OutPort::Producer`
-    /// ports connected to the *same* databus instance.
-    ///
-    /// The `Element` implementation can then detect this condition (e.g., by
-    /// comparing pointers) and safely cast the databus to the `Transformer` trait
-    /// to acquire a mutable payload for in-place modification, thus achieving
-    /// zero-copy processing. If the ports are connected to different databuses,
-    /// the element should fall back to a copy-based approach.
-    async fn process<'a, R, W, C, P, T>(
+    /// It takes an `InPort`, an `OutPort`, and an `InPlacePort` to perform one step of data
+    /// processing, by acquiring and releasing payloads from the databus.
+    async fn process<'a, C, P, T>(
         &mut self,
-        in_port: &mut InPort<'a, R, C>,
-        out_port: &mut OutPort<'a, W, P>,
+        in_port: &mut InPort<'a, C>,
+        out_port: &mut OutPort<'a, P>,
         inplace_port: &mut InPlacePort<'a, T>,
     ) -> ProcessResult<Self::Error>
     where
-        R: Read + Seek,
-        W: Write + Seek,
         C: Consumer<'a>,
         P: Producer<'a>,
         T: Transformer<'a>;

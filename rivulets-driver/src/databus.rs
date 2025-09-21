@@ -1,5 +1,5 @@
 use crate::payload::{Metadata, ReadPayload, TransformPayload, WritePayload};
-use crate::port::{Dmy, InPlacePort, InPort, OutPort};
+use crate::port::{InPlacePort, InPort, OutPort};
 
 pub enum Operation {
     Read,
@@ -26,7 +26,7 @@ pub trait Consumer<'a>: Sized {
     // }
 
     /// Helper to create an `InPort` for this `Consumer`.
-    fn in_port(&'a self) -> InPort<'a, Dmy, Self> {
+    fn in_port(&'a self) -> InPort<'a, Self> {
         InPort::Consumer(self)
     }
 }
@@ -46,7 +46,7 @@ pub trait Producer<'a>: Sized {
     fn release_write(&'a self, buf: &'a mut [u8], metadata: Metadata);
 
     /// Helper to create an `OutPort` for this `Producer`.
-    fn out_port(&'a self) -> OutPort<'a, Dmy, Self> {
+    fn out_port(&'a self) -> OutPort<'a, Self> {
         OutPort::Producer(self)
     }
 }
