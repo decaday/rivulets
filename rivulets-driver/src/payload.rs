@@ -77,12 +77,17 @@ pub enum Position {
 pub struct ReadPayload<'a, C: Consumer<'a>> {
     data: &'a [u8],
     pub metadata: Metadata,
+    remaining_length: usize,
     consumer: &'a C,
 }
 
 impl<'a, C: Consumer<'a>> ReadPayload<'a, C> {
     pub fn new(data: &'a [u8], metadata: Metadata, consumer: &'a C) -> Self {
-        Self { data, metadata, consumer }
+        Self { data, metadata, remaining_length: 0, consumer }
+    }
+
+    pub fn set_remaining_length(&mut self, length: usize) {
+        self.remaining_length = length;
     }
 }
 
@@ -90,7 +95,7 @@ impl_deref_valid_length!(ReadPayload, <'a, C: Consumer<'a>>);
 
 impl<'a, C: Consumer<'a>> Drop for ReadPayload<'a, C> {
     fn drop(&mut self) {
-        self.consumer.release_read(self.metadata.valid_length);
+        self.consumer.release_read(self.remaining_length);
     }
 }
 
@@ -102,7 +107,7 @@ impl<'a, C: Consumer<'a>> Drop for ReadPayload<'a, C> {
 /// back to the `Producer`.
 pub struct WritePayload<'a, P: Producer<'a>> {
     data: &'a mut [u8],
-    metadata: Metadata, // Kept private to enforce setter usage.
+    pub metadata: Metadata,
     producer: &'a P,
 }
 
@@ -146,20 +151,24 @@ impl<'a, P: Producer<'a>> Drop for WritePayload<'a, P> {
 /// considered complete, making the buffer available for the next consumer or transformer.
 pub struct TransformPayload<'a, T: Transformer<'a>> {
     data: &'a mut [u8],
-    /// Metadata from the previous stage, which can be read by the transformer.
     pub metadata: Metadata,
+    remaining_length: usize,
     transformer: &'a T,
 }
 
 impl<'a, T: Transformer<'a>> TransformPayload<'a, T> {
     pub fn new(data: &'a mut [u8], metadata: Metadata, transformer: &'a T) -> Self {
-        Self { data, metadata, transformer }
+        Self { data, metadata, remaining_length: 0, transformer }
     }
 
     /// Allows the transformer to update the valid length if the transformation
     /// changes the amount of data (e.g., compression).
     pub fn set_valid_length(&mut self, length: usize) {
         self.metadata.valid_length = length.min(self.data.len());
+    }
+
+    pub fn set_remaining_length(&mut self, length: usize) {
+        self.remaining_length = length;
     }
 }
 
@@ -170,6 +179,6 @@ impl<'a, T: Transformer<'a>> Drop for TransformPayload<'a, T> {
     fn drop(&mut self) {
         let dummy_slice = &mut [];
         let buffer = core::mem::replace(&mut self.data, dummy_slice);
-        self.transformer.release_transform(buffer, self.metadata);
+        self.transformer.release_transform(buffer, self.metadata, self.remaining_length);
     }
 }

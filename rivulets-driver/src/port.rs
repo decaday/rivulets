@@ -1,4 +1,4 @@
-use crate::databus::{Consumer, Producer, Transformer};
+use crate::databus::{Consumer, Operation, Producer, Transformer};
 use crate::payload::{Metadata, ReadPayload, TransformPayload, WritePayload};
 
 /// Represents an input port for an `Element`.
@@ -72,48 +72,54 @@ impl Default for InPlacePort<'_, Dmy> {
 /// Specifies the minimum required payload size for each port type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PortRequirements {
-    pub in_payload: Option<u16>,
-    pub out_payload: Option<u16>,
-    pub in_place: Option<u16>,
+    pub in_: Option<PayloadSize>,
+    pub out: Option<PayloadSize>,
+    pub in_place: Option<PayloadSize>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PayloadSize {
+    pub min: u16,
+    pub preferred: u16,
 }
 
 impl PortRequirements {
     pub fn new() -> Self {
         Self {
-            in_payload: None,
-            out_payload: None,
+            in_: None,
+            out: None,
             in_place: None,
         }
     }
 
-    pub fn new_payload_to_payload(in_size: u16, out_size: u16) -> Self {
+    pub fn new_payload_to_payload(in_size: PayloadSize, out_size: PayloadSize) -> Self {
         Self {
-            in_payload: Some(in_size),
-            out_payload: Some(out_size),
+            in_: Some(in_size),
+            out: Some(out_size),
             in_place: None,
         }
     }
 
-    pub fn new_in_place(size: u16) -> Self {
+    pub fn new_in_place(size: PayloadSize) -> Self {
         Self {
-            in_payload: None,
-            out_payload: None,
+            in_: None,
+            out: None,
             in_place: Some(size),
         }
     }
 
-    pub fn sink(size: u16) -> Self {
+    pub fn sink(size: PayloadSize) -> Self {
         Self {
-            in_payload: Some(size),
-            out_payload: None,
+            in_: Some(size),
+            out: None,
             in_place: None,
         }
     }
 
-    pub fn source(size: u16) -> Self {
+    pub fn source(size: PayloadSize) -> Self {
         Self {
-            in_payload: None,
-            out_payload: Some(size),
+            in_: None,
+            out: Some(size),
             in_place: None,
         }
     }
@@ -124,6 +130,12 @@ impl PortRequirements {
 pub struct Dmy;
 
 // --- Dummy Trait Implementations for Dmy ---
+
+impl<'a> crate::databus::Databus for Dmy {
+    fn register(&mut self, _operation: Operation, _payload_size: PayloadSize) {
+        unimplemented!()
+    }
+}
 
 impl<'a> Consumer<'a> for Dmy {
     async fn acquire_read(&'a self) -> ReadPayload<'a, Self> {
@@ -147,7 +159,7 @@ impl<'a> Transformer<'a> for Dmy {
     async fn acquire_transform(&'a self) -> TransformPayload<'a, Self> {
         unimplemented!()
     }
-    fn release_transform(&self, _buf: &'a mut [u8], _metadata: Metadata) {
+    fn release_transform(&self, _buf: &'a mut [u8], _metadata: Metadata, _remaining_length: usize) {
         unimplemented!()
     }
 }

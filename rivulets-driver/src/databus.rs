@@ -1,15 +1,26 @@
 use crate::payload::{Metadata, ReadPayload, TransformPayload, WritePayload};
-use crate::port::{InPlacePort, InPort, OutPort};
+use crate::port::{InPlacePort, InPort, OutPort, PayloadSize};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(usize)]
 pub enum Operation {
-    Read,
-    Write,
-    InPlace,
+    Produce = 0,
+    Consume = 1,
+    InPlace = 2,
+}
+
+impl Operation {
+    pub const COUNT: usize = 3; 
+}
+
+pub trait Databus {
+    // Initialization failure must be due to unmet port requirements; just panic.
+    fn register(&mut self, operation: Operation, payload_size: PayloadSize);
 }
 
 /// A trait for components from which audio data can be read asynchronously.
 #[allow(async_fn_in_trait)]
-pub trait Consumer<'a>: Sized {
+pub trait Consumer<'a>: Sized + Databus {
     /// Asynchronously acquires a payload for reading data.
     ///
     /// This function will wait until data is available in the databus.
@@ -19,7 +30,7 @@ pub trait Consumer<'a>: Sized {
     ///
     /// This method is intended for internal use by the payload's RAII mechanism
     /// and should not be called directly by the user.
-    fn release_read(&'a self, consumed_bytes: usize);
+    fn release_read(&'a self, remaining_length: usize);
 
     // fn is_transformer_configured(&self) -> bool {
     //     false
@@ -33,7 +44,7 @@ pub trait Consumer<'a>: Sized {
 
 /// A trait for components to which audio data can be written asynchronously.
 #[allow(async_fn_in_trait)]
-pub trait Producer<'a>: Sized {
+pub trait Producer<'a>: Sized + Databus {
     /// Asynchronously acquires a payload for writing data.
     ///
     /// This function will wait until space is available in the databus.
@@ -53,7 +64,7 @@ pub trait Producer<'a>: Sized {
 
 /// A trait for components that support in-place modification of a buffer.
 #[allow(async_fn_in_trait)]
-pub trait Transformer<'a>: Sized {
+pub trait Transformer<'a>: Sized + Databus {
     /// Asynchronously acquires a payload for in-place transformation.
     ///
     /// This operation will wait until the databus contains data that is ready
@@ -64,10 +75,10 @@ pub trait Transformer<'a>: Sized {
     ///
     /// This method is intended for internal use by the payload's RAII mechanism
     /// and should not be called directly by the user.
-    fn release_transform(&'a self, buf: &'a mut [u8], metadata: Metadata);
+    fn release_transform(&'a self, buf: &'a mut [u8], metadata: Metadata, remaining_length: usize);
 
     /// Helper to create an `InPlacePort` for this `Transformer`.
-    fn inplace_port(&'a self) -> InPlacePort<'a, Self> {
+    fn in_place_port(&'a self) -> InPlacePort<'a, Self> {
         InPlacePort::Transformer(self)
     }
 }

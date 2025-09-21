@@ -12,6 +12,10 @@ pub trait Info: core::fmt::Debug + Clone + Copy + PartialEq + Eq {
     }
 
     fn get_alignment_bytes(&self) -> u8;
+
+    fn get_channel_count(&self) -> u8 {
+        1
+    }
 }
 
 /// A default, empty Info struct for pipelines that do not need metadata.

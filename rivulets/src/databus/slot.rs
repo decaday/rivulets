@@ -1,12 +1,16 @@
+#![macro_use]
+
 use core::cell::UnsafeCell;
 use core::future::poll_fn;
-use core::sync::atomic::{AtomicU8, Ordering};
 use core::task::Poll;
 
 use embassy_sync::waitqueue::AtomicWaker;
+use portable_atomic::{AtomicU8, Ordering};
 
-use rivulets_driver::databus::{Consumer, Producer, Transformer};
+use rivulets_driver::databus::{Consumer, Databus, Operation, Producer, Transformer};
 use rivulets_driver::payload::{Metadata, ReadPayload, TransformPayload, WritePayload};
+use rivulets_driver::port::PayloadSize;
+
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -54,6 +58,7 @@ impl TryFrom<u8> for State {
 /// The shared state for synchronization between tasks.
 struct SharedState {
     state: AtomicU8,
+    /// Waker for the producer task, which waits for the `Empty` state.
     producer_waker: AtomicWaker,
     /// Waker for the transformer task, which waits for the `Full` state.
     transformer_waker: AtomicWaker,
@@ -67,10 +72,7 @@ pub struct Slot<'b> {
     buffer: UnsafeCell<Option<&'b mut [u8]>>,
     payload_metadata: UnsafeCell<Option<Metadata>>,
     shared: SharedState,
-    /// Configuration flag to determine the pipeline structure.
-    /// If true, the pipeline is Producer -> Transformer -> Consumer.
-    /// If false, the pipeline is Producer -> Consumer.
-    has_transformer: bool,
+    registered: [bool; Operation::COUNT],
 }
 
 unsafe impl<'b> Sync for Slot<'b> {}
@@ -81,8 +83,7 @@ impl<'b> Slot<'b> {
     /// # Arguments
     ///
     /// * `buffer`: The memory buffer to be managed by the slot.
-    /// * `has_transformer`: A boolean indicating whether an in-place transformer is part of the pipeline.
-    pub fn new(buffer: Option<&'b mut [u8]>, has_transformer: bool) -> Self {
+    pub fn new(buffer: Option<&'b mut [u8]>) -> Self {
         let initial_state = if buffer.is_some() { State::Empty } else { State::NoneBuffer };
         Slot {
             buffer: UnsafeCell::new(buffer),
@@ -93,7 +94,7 @@ impl<'b> Slot<'b> {
                 transformer_waker: AtomicWaker::new(),
                 consumer_waker: AtomicWaker::new(),
             },
-            has_transformer,
+            registered: [false; Operation::COUNT],
         }
     }
 
@@ -102,8 +103,25 @@ impl<'b> Slot<'b> {
     }
 }
 
+impl Databus for Slot<'_> {
+    fn register(&mut self, operation: Operation, payload_size: PayloadSize) {
+        let len = unsafe {
+            self.buffer.get().as_ref().and_then(|b| b.as_ref()).map_or(0, |buf| buf.len())
+        };
+
+        if payload_size.preferred as usize > len {
+            warn!("Slot buffer({}) is smaller than preferred size({})", len, payload_size.preferred);
+        }
+
+        if core::mem::replace(&mut self.registered[operation as usize], true) {
+            panic!("{:?}(er) already registered", operation);
+        }
+    }
+}
+
 impl<'b> Producer<'b> for Slot<'b> {
     async fn acquire_write(&'b self) -> WritePayload<'b, Self> {
+        debug_assert!(self.registered[Operation::Produce as usize], "acquire_write called on a Slot configured without a producer");
         poll_fn(|cx| {
             // Attempt to transition from Empty to Writing.
             if self.shared.state.compare_exchange(
@@ -124,9 +142,10 @@ impl<'b> Producer<'b> for Slot<'b> {
         unsafe {
             *self.buffer.get() = Some(buf);
             *self.payload_metadata.get() = Some(metadata);
+
         }
 
-        if self.has_transformer {
+        if self.registered[Operation::InPlace as usize] {
             // If a transformer is configured, transition to `Full` and wake the transformer.
             self.shared.state.store(State::Full as u8, Ordering::Release);
             self.shared.transformer_waker.wake();
@@ -141,7 +160,7 @@ impl<'b> Transformer<'b> for Slot<'b> {
     async fn acquire_transform(&'b self) -> TransformPayload<'b, Self> {
         // This function should logically only be polled if `has_transformer` is true.
         // A debug assertion helps catch incorrect usage during development.
-        debug_assert!(self.has_transformer, "acquire_transform called on a Slot configured without a transformer");
+        debug_assert!(self.registered[Operation::InPlace as usize], "acquire_transform called on a Slot configured without a transformer");
 
         poll_fn(|cx| {
             // A Transformer waits for the `Full` state.
@@ -150,7 +169,7 @@ impl<'b> Transformer<'b> for Slot<'b> {
             ).is_ok() {
                 let (buffer, metadata) = unsafe {
                     let buffer_mut = (*self.buffer.get()).take().expect("BUG: State was Full but buffer was None");
-                    let metadata_ref = (*self.payload_metadata.get()).unwrap_or_default();
+                    let metadata_ref = (*self.payload_metadata.get()).unwrap();
                     (buffer_mut, metadata_ref)
                 };
                 Poll::Ready(TransformPayload::new(buffer, metadata, self))
@@ -162,8 +181,12 @@ impl<'b> Transformer<'b> for Slot<'b> {
         }).await
     }
 
-    fn release_transform(&self, buf: &'b mut [u8], metadata: Metadata) {
+    fn release_transform(&self, buf: &'b mut [u8], metadata: Metadata, remaining_length: usize) {
         trace!("Transformer releasing transform slot");
+        if remaining_length > 0 {
+            panic!("Transformer must consume all data in the slot. Partial consumption is not supported in Slot.");
+        }
+
         unsafe {
             *self.buffer.get() = Some(buf);
             *self.payload_metadata.get() = Some(metadata);
@@ -178,6 +201,7 @@ impl<'b> Transformer<'b> for Slot<'b> {
 
 impl<'b> Consumer<'b> for Slot<'b> {
     async fn acquire_read(&'b self) -> ReadPayload<'b, Self> {
+        debug_assert!(self.registered[Operation::Consume as usize], "acquire_read called on a Slot configured without a consumer");
         poll_fn(|cx| {
             // The consumer waits for the `Transformed` state.
             // The producer is responsible for putting the slot into this state
@@ -187,7 +211,7 @@ impl<'b> Consumer<'b> for Slot<'b> {
             ).is_ok() {
                 let (buffer, metadata) = unsafe {
                     let buffer_ref = (*self.buffer.get()).as_ref().expect("BUG: State was Transformed but buffer was None");
-                    let metadata_ref = (*self.payload_metadata.get()).unwrap_or_default();
+                    let metadata_ref = (*self.payload_metadata.get()).unwrap();
                     (buffer_ref, metadata_ref)
                 };
                 Poll::Ready(ReadPayload::new(buffer, metadata, self))
@@ -198,8 +222,11 @@ impl<'b> Consumer<'b> for Slot<'b> {
         }).await
     }
 
-    fn release_read(&'b self, _consumed_bytes: usize) {
+    fn release_read(&'b self, remaining_length: usize) {
         trace!("Consumer releasing read slot");
+        if remaining_length > 0 {
+            panic!("Consumer must consume all data in the slot. Partial consumption is not supported in Slot.");
+        }
         // After reading, the slot is always returned to the `Empty` state.
         self.shared.state.store(State::Empty as u8, Ordering::Release);
         // Wake the producer to start the cycle again.
@@ -234,7 +261,9 @@ mod tests {
         // Refer to examples for better usage patterns.
         let static_buffer: &'static mut [u8] = Box::leak(buffer.into_boxed_slice());
         // Configure the slot for a pipeline with NO transformer.
-        let slot = Slot::new(Some(static_buffer), false);
+        let mut slot = Slot::new(Some(static_buffer));
+        slot.register(Operation::Produce, PayloadSize { preferred: 4, min: 4 });
+        slot.register(Operation::Consume, PayloadSize { preferred: 4, min: 4 });
         let static_slot: &'static Slot = Box::leak(Box::new(slot));
 
         // Spawn a consumer that waits for data.
@@ -272,7 +301,12 @@ mod tests {
         // We use box::leak to create a 'static mutable reference, just for testing purposes.
         // Refer to examples for better usage patterns.
         let static_buffer: &'static mut [u8] = Box::leak(buffer.into_boxed_slice());
-        let slot = Slot::new(Some(static_buffer), true);
+        let mut slot = Slot::new(Some(static_buffer));
+
+        slot.register(Operation::Produce, PayloadSize { preferred: 4, min: 4 });
+        slot.register(Operation::InPlace, PayloadSize { preferred: 4, min: 4 });
+        slot.register(Operation::Consume, PayloadSize { preferred: 4, min: 4 });
+
         let static_slot: &'static Slot = Box::leak(Box::new(slot));
 
         // Create a channel to signal the main thread from the consumer.
@@ -327,7 +361,10 @@ mod tests {
         // Refer to examples for better usage patterns.
         let static_buffer: &'static mut [u8] = Box::leak(buffer.into_boxed_slice());
         // Configure the slot WITH a transformer.
-        let slot = Slot::new(Some(static_buffer), true);
+        let mut slot = Slot::new(Some(static_buffer));
+        slot.register(Operation::InPlace, PayloadSize { preferred: 4, min: 4 });
+        slot.register(Operation::Produce, PayloadSize { preferred: 4, min: 4 });
+        slot.register(Operation::Consume, PayloadSize { preferred: 4, min: 4 });
         let static_slot: &'static Slot = Box::leak(Box::new(slot));
 
         // Spawn a consumer that will try to acquire a read lock.
