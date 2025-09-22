@@ -5,4 +5,6 @@ pub mod fmt;
 pub mod utils;
 pub mod databus;
 
+pub use ringbuf::storage;
+
 // pub mod transformer;

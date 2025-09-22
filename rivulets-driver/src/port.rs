@@ -150,7 +150,7 @@ impl<'a> Producer<'a> for Dmy {
     async fn acquire_write(&'a self) -> WritePayload<'a, Self> {
         unimplemented!()
     }
-    fn release_write(&self, _buf: &'a mut [u8], _metadata: Metadata) {
+    fn release_write(&self, _metadata: Metadata) {
         unimplemented!()
     }
 }
@@ -159,7 +159,7 @@ impl<'a> Transformer<'a> for Dmy {
     async fn acquire_transform(&'a self) -> TransformPayload<'a, Self> {
         unimplemented!()
     }
-    fn release_transform(&self, _buf: &'a mut [u8], _metadata: Metadata, _remaining_length: usize) {
+    fn release_transform(&self, _metadata: Metadata, _remaining_length: usize) {
         unimplemented!()
     }
 }

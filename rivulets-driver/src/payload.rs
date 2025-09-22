@@ -136,10 +136,7 @@ impl_deref_mut_full_data!(WritePayload, <'a, P: Producer<'a>>);
 
 impl<'a, P: Producer<'a>> Drop for WritePayload<'a, P> {
     fn drop(&mut self) {
-        // Replace the buffer with a dummy slice to transfer ownership back.
-        let dummy_slice = &mut [];
-        let buffer = core::mem::replace(&mut self.data, dummy_slice);
-        self.producer.release_write(buffer, self.metadata);
+        self.producer.release_write(self.metadata);
     }
 }
 
@@ -177,8 +174,6 @@ impl_deref_mut_full_data!(TransformPayload, <'a, T: Transformer<'a>>);
 
 impl<'a, T: Transformer<'a>> Drop for TransformPayload<'a, T> {
     fn drop(&mut self) {
-        let dummy_slice = &mut [];
-        let buffer = core::mem::replace(&mut self.data, dummy_slice);
-        self.transformer.release_transform(buffer, self.metadata, self.remaining_length);
+        self.transformer.release_transform(self.metadata, self.remaining_length);
     }
 }

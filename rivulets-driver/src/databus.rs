@@ -54,7 +54,7 @@ pub trait Producer<'a>: Sized + Databus {
     ///
     /// This method is intended for internal use by the payload's RAII mechanism
     /// and should not be called directly by the user.
-    fn release_write(&'a self, buf: &'a mut [u8], metadata: Metadata);
+    fn release_write(&'a self, metadata: Metadata);
 
     /// Helper to create an `OutPort` for this `Producer`.
     fn out_port(&'a self) -> OutPort<'a, Self> {
@@ -75,7 +75,7 @@ pub trait Transformer<'a>: Sized + Databus {
     ///
     /// This method is intended for internal use by the payload's RAII mechanism
     /// and should not be called directly by the user.
-    fn release_transform(&'a self, buf: &'a mut [u8], metadata: Metadata, remaining_length: usize);
+    fn release_transform(&'a self, metadata: Metadata, remaining_length: usize);
 
     /// Helper to create an `InPlacePort` for this `Transformer`.
     fn in_place_port(&'a self) -> InPlacePort<'a, Self> {
