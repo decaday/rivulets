@@ -5,10 +5,11 @@ use core::future::poll_fn;
 use core::mem::MaybeUninit;
 use core::task::Poll;
 
+use bitfield_struct::bitfield;
 use embassy_sync::waitqueue::AtomicWaker;
 use portable_atomic::{AtomicU8, Ordering};
 
-use rivulets_driver::databus::{Consumer, Databus, Operation, Producer, Transformer};
+use rivulets_driver::databus::{Consumer, Databus, Producer, Transformer};
 use rivulets_driver::payload::{Metadata, ReadPayload, TransformPayload, WritePayload};
 use rivulets_driver::port::PayloadSize;
 
@@ -17,6 +18,20 @@ use crate::storage::Storage;
 use crate::storage::Heap;
 use crate::storage::Array;
 
+#[cfg(feature = "alloc")]
+extern crate alloc;
+#[cfg(feature = "alloc")]
+use alloc::vec::Vec;
+#[cfg(feature = "alloc")]
+use crate::Mutex;
+
+use super::{ProducerHandle, ConsumerHandle, TransformerHandle};
+
+#[cfg(not(feature = "alloc"))]
+const MAX_CONSUMERS: usize = 2;
+#[cfg(feature = "alloc")]
+const MAX_CONSUMERS: usize = 8;
+
 pub type StaticSlot<const N: usize> = Slot<Array<u8, N>>;
 #[cfg(feature = "alloc")]
 pub type HeapSlot = Slot<Heap<u8>>;
@@ -24,17 +39,11 @@ pub type HeapSlot = Slot<Heap<u8>>;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 enum State {
-    /// The slot is empty and ready for a producer.
     Empty,
-    /// A producer is currently writing to the buffer.
     Writing,
-    /// The slot is full with raw data, ready for the next stage (transformer or consumer).
     Full,
-    /// A transformer is currently modifying the buffer in-place.
     Transforming,
-    /// The data has been transformed (or is ready for consumption directly), now ready ONLY for a consumer.
     Transformed,
-    /// A consumer is currently reading from the buffer.
     Reading,
 }
 
@@ -60,35 +69,34 @@ impl TryFrom<u8> for State {
     }
 }
 
+#[bitfield(u8)]
+#[derive(PartialEq, Eq)]
+struct Registration {
+    producer: bool,
+    transformer: bool,
+    #[bits(6)]
+    consumer_count: u8,
+}
 
-/// A single-slot channel with a configurable state machine that correctly sequences
-/// an optional in-place transformation between the producer and consumer.
 pub struct Slot<S: Storage<Item = u8>> {
-    // The storage is now held directly. The UnsafeCell for interior mutability
-    // is handled within the Storage implementations (e.g., Owning, Array, Heap).
     storage: S,
     payload_metadata: UnsafeCell<Option<Metadata>>,
     state: AtomicU8,
-    /// Waker for the producer task, which waits for the `Empty` state.
     producer_waker: AtomicWaker,
-    /// Waker for the transformer task, which waits for the `Full` state.
     transformer_waker: AtomicWaker,
-    /// Waker for the final consumer task, which waits for `Transformed`.
-    consumer_waker: AtomicWaker,
-    registered: [bool; Operation::COUNT],
+    
+    #[cfg(not(feature = "alloc"))]
+    consumer_wakers: [AtomicWaker; MAX_CONSUMERS],
+    #[cfg(feature = "alloc")]
+    consumer_wakers: Mutex<Vec<AtomicWaker>>,
+
+    registered: AtomicU8,
+    consumers_finished: AtomicU8,
 }
 
-// The Storage trait implementations (like Owning) are responsible for ensuring
-// they are Sync if they are to be used across threads. The Slot itself can
-// be Sync if the underlying storage S is Sync.
 unsafe impl<S: Storage<Item = u8> + Sync> Sync for Slot<S> {}
 
 impl<S: Storage<Item = u8>> Slot<S> {
-    /// Creates a new Slot from a given storage.
-    ///
-    /// # Arguments
-    ///
-    /// * `storage`: The storage backend to be managed by the slot.
     pub fn new(storage: S) -> Self {
         Slot {
             storage,
@@ -96,72 +104,112 @@ impl<S: Storage<Item = u8>> Slot<S> {
             state: AtomicU8::new(State::Empty as u8),
             producer_waker: AtomicWaker::new(),
             transformer_waker: AtomicWaker::new(),
-            consumer_waker: AtomicWaker::new(),
-            registered: [false; Operation::COUNT],
+            #[cfg(not(feature = "alloc"))]
+            consumer_wakers: core::array::from_fn(|_| AtomicWaker::new()),
+            #[cfg(feature = "alloc")]
+            consumer_wakers: Mutex::new(Vec::new()),
+            registered: AtomicU8::new(Registration::new().into()),
+            consumers_finished: AtomicU8::new(0),
         }
     }
 
-    /// Returns a copy of the current payload metadata, if any.
     pub fn get_current_metadata(&self) -> Option<Metadata> {
         unsafe { (*self.payload_metadata.get()).clone() }
     }
 }
 
-/// Methods for creating Slots with heap-allocated buffers.
+impl<S: Storage<Item=u8>> Databus for Slot<S> {
+    fn do_register_producer(&self, payload_size: PayloadSize) {
+        loop {
+            let current_val = self.registered.load(Ordering::Relaxed);
+            let current_reg: Registration = current_val.into();
+            if current_reg.producer() {
+                panic!("Producer already registered");
+            }
+            let new_reg = current_reg.with_producer(true);
+            if self.registered.compare_exchange_weak(current_val, new_reg.into(), Ordering::AcqRel, Ordering::Relaxed).is_ok() {
+                break;
+            }
+        }
+
+        if payload_size.preferred as usize > self.storage.len() {
+            warn!("Slot buffer({}) is smaller than preferred size({})", self.storage.len(), payload_size.preferred);
+        }
+    }
+
+    fn do_register_consumer(&self, payload_size: PayloadSize) -> u8 {
+        let id = loop {
+            let current_val = self.registered.load(Ordering::Relaxed);
+            let current_reg: Registration = current_val.into();
+            let count = current_reg.consumer_count();
+
+            if count as usize >= MAX_CONSUMERS {
+                panic!("Maximum number of consumers ({}) reached", MAX_CONSUMERS);
+            }
+
+            let new_reg = current_reg.with_consumer_count(count + 1);
+            if self.registered.compare_exchange_weak(current_val, new_reg.into(), Ordering::AcqRel, Ordering::Relaxed).is_ok() {
+                break count;
+            }
+        };
+
+        #[cfg(feature = "alloc")]
+        {
+            let mut wakers = self.consumer_wakers.lock().unwrap();
+            wakers.push(AtomicWaker::new());
+        }
+
+        if payload_size.preferred as usize > self.storage.len() {
+            warn!("Slot buffer({}) is smaller than preferred size({})", self.storage.len(), payload_size.preferred);
+        }
+        id
+    }
+
+    fn do_register_transformer(&self, payload_size: PayloadSize) {
+        loop {
+            let current_val = self.registered.load(Ordering::Relaxed);
+            let current_reg: Registration = current_val.into();
+            if current_reg.transformer() {
+                panic!("Transformer already registered");
+            }
+            let new_reg = current_reg.with_transformer(true);
+            if self.registered.compare_exchange_weak(current_val, new_reg.into(), Ordering::AcqRel, Ordering::Relaxed).is_ok() {
+                break;
+            }
+        }
+        
+        if payload_size.preferred as usize > self.storage.len() {
+             // warn!("Slot buffer({}) is smaller than preferred size({})", self.storage.len(), payload_size.preferred);
+        }
+    }
+}
+
 #[cfg(feature = "alloc")]
 impl Slot<Heap<u8>> {
-    /// Creates a new Slot with a heap-allocated buffer of a specified capacity.
-    ///
-    /// # Arguments
-    ///
-    /// * `capacity`: The size of the buffer to allocate.
     pub fn new_heap(capacity: usize) -> Self {
         Self::new(Heap::new(capacity))
     }
 }
 
-/// Methods for creating Slots with statically-allocated array buffers.
 impl<const N: usize> Slot<Array<u8, N>> {
-    /// Creates a new Slot with a statically-allocated array buffer of size N.
-    /// The buffer is uninitialized.
     pub fn new_static() -> Self {
-        // The `Owning` wrapper inside `Array` provides the necessary UnsafeCell.
         Self::new(Array::from([MaybeUninit::uninit(); N]))
     }
 }
 
-impl<S: Storage<Item = u8>> Databus for Slot<S> {
-    fn register(&mut self, operation: Operation, payload_size: PayloadSize) {
-        let len = self.storage.len();
-
-        if payload_size.preferred as usize > len {
-            warn!("Slot buffer({}) is smaller than preferred size({})", len, payload_size.preferred);
-        }
-
-        if core::mem::replace(&mut self.registered[operation as usize], true) {
-            panic!("{:?}(er) already registered", operation);
-        }
-    }
-}
-
-impl<'b, S: Storage<Item = u8> + 'b> Producer<'b> for Slot<S> {
-    async fn acquire_write(&'b self) -> WritePayload<'b, Self> {
-        debug_assert!(self.registered[Operation::Produce as usize], "acquire_write called on a Slot configured without a producer");
+impl<'a, S: Storage<Item = u8> + 'a> Producer<'a> for ProducerHandle<Slot<S>> {
+    async fn acquire_write(&'a self) -> WritePayload<'a, Self> {
+        let registration: Registration = self.inner.registered.load(Ordering::Relaxed).into();
+        assert!(registration.producer(), "acquire_write called on a Slot configured without a producer");
         poll_fn(|cx| {
-            // Attempt to transition from Empty to Writing.
-            if self.state.compare_exchange(
+            if self.inner.state.compare_exchange(
                 State::Empty as u8, State::Writing as u8, Ordering::Acquire, Ordering::Relaxed
             ).is_ok() {
-                // On success, grant write access to the entire buffer.
-                // The `Storage` trait's `slice_mut` can be called on `&self`
-                // because the underlying implementation uses UnsafeCell.
-                let buffer = unsafe { self.storage.slice_mut(0..self.storage.len()) };
-                // Transmute from `MaybeUninit<u8>` to `u8` is safe here for writing.
+                let buffer = unsafe { self.inner.storage.slice_mut(0..self.inner.storage.len()) };
                 let buffer_ready_for_write = unsafe { &mut *(buffer as *mut [MaybeUninit<u8>] as *mut [u8]) };
                 Poll::Ready(WritePayload::new(buffer_ready_for_write, self))
             } else {
-                // Otherwise, register waker and wait.
-                self.producer_waker.register(cx.waker());
+                self.inner.producer_waker.register(cx.waker());
                 Poll::Pending
             }
         }).await
@@ -169,38 +217,49 @@ impl<'b, S: Storage<Item = u8> + 'b> Producer<'b> for Slot<S> {
 
     fn release_write(&self, metadata: Metadata) {
         unsafe {
-            *self.payload_metadata.get() = Some(metadata);
+            *self.inner.payload_metadata.get() = Some(metadata);
         }
+        let registration: Registration = self.inner.registered.load(Ordering::Relaxed).into();
 
-        if self.registered[Operation::InPlace as usize] {
-            // If a transformer is configured, transition to `Full` and wake the transformer.
-            self.state.store(State::Full as u8, Ordering::Release);
-            self.transformer_waker.wake();
+        if registration.transformer() {
+            self.inner.state.store(State::Full as u8, Ordering::Release);
+            self.inner.transformer_waker.wake();
         } else {
-            self.state.store(State::Transformed as u8, Ordering::Release);
-            self.consumer_waker.wake();
+            self.inner.consumers_finished.store(0, Ordering::Relaxed);
+            self.inner.state.store(State::Transformed as u8, Ordering::Release);
+            #[cfg(not(feature = "alloc"))]
+            for i in 0..registration.consumer_count() as usize {
+                self.inner.consumer_wakers[i].wake();
+            }
+            #[cfg(feature = "alloc")]
+            {
+                let wakers = self.inner.consumer_wakers.lock().unwrap();
+                for waker in wakers.iter() {
+                    waker.wake();
+                }
+            }
         }
     }
 }
 
-impl<'b, S: Storage<Item = u8> + 'b> Transformer<'b> for Slot<S> {
-    async fn acquire_transform(&'b self) -> TransformPayload<'b, Self> {
-        debug_assert!(self.registered[Operation::InPlace as usize], "acquire_transform called on a Slot configured without a transformer");
+impl<'a, S: Storage<Item = u8> + 'a> Transformer<'a> for TransformerHandle<Slot<S>> {
+    async fn acquire_transform(&'a self) -> TransformPayload<'a, Self> {
+        let registration: Registration = self.inner.registered.load(Ordering::Relaxed).into();
+        assert!(registration.transformer(), "acquire_transform called on a Slot configured without a transformer");
 
         poll_fn(|cx| {
-            // A Transformer waits for the `Full` state.
-            if self.state.compare_exchange(
+            if self.inner.state.compare_exchange(
                 State::Full as u8, State::Transforming as u8, Ordering::Acquire, Ordering::Relaxed
             ).is_ok() {
                 let (buffer, metadata) = unsafe {
-                    let buffer_mut = self.storage.slice_mut(0..self.storage.len());
+                    let buffer_mut = self.inner.storage.slice_mut(0..self.inner.storage.len());
                     let buffer_ready = &mut *(buffer_mut as *mut [MaybeUninit<u8>] as *mut [u8]);
-                    let metadata_ref = (*self.payload_metadata.get()).unwrap();
+                    let metadata_ref = (*self.inner.payload_metadata.get()).unwrap();
                     (buffer_ready, metadata_ref)
                 };
                 Poll::Ready(TransformPayload::new(buffer, metadata, self))
             } else {
-                self.transformer_waker.register(cx.waker());
+                self.inner.transformer_waker.register(cx.waker());
                 Poll::Pending
             }
         }).await
@@ -213,48 +272,86 @@ impl<'b, S: Storage<Item = u8> + 'b> Transformer<'b> for Slot<S> {
         }
 
         unsafe {
-            *self.payload_metadata.get() = Some(metadata);
+            *self.inner.payload_metadata.get() = Some(metadata);
         }
-        // After transforming, the state becomes `Transformed`, ready ONLY for a consumer.
-        self.state.store(State::Transformed as u8, Ordering::Release);
-        // It wakes ONLY the final consumer.
-        self.consumer_waker.wake();
+        self.inner.consumers_finished.store(0, Ordering::Relaxed);
+        self.inner.state.store(State::Transformed as u8, Ordering::Release);
+        
+        #[cfg(not(feature = "alloc"))] {
+            let registration: Registration = self.inner.registered.load(Ordering::Relaxed).into();
+            for i in 0..registration.consumer_count() as usize {
+                self.inner.consumer_wakers[i].wake();
+            }
+        }
+        #[cfg(feature = "alloc")] {
+            let wakers = self.inner.consumer_wakers.lock().unwrap();
+            for waker in wakers.iter() {
+                waker.wake();
+            }
+        }
     }
 }
 
-
-impl<'b, S: Storage<Item = u8> + 'b> Consumer<'b> for Slot<S> {
-    async fn acquire_read(&'b self) -> ReadPayload<'b, Self> {
-        debug_assert!(self.registered[Operation::Consume as usize], "acquire_read called on a Slot configured without a consumer");
+impl<'a, S: Storage<Item = u8> + 'a> Consumer<'a> for ConsumerHandle<Slot<S>> {
+    async fn acquire_read(&'a self) -> ReadPayload<'a, Self> {
         poll_fn(|cx| {
-            if self.state.compare_exchange(
-                State::Transformed as u8, State::Reading as u8, Ordering::Acquire, Ordering::Relaxed
-            ).is_ok() {
+            let cur_cons_bit: u8 = 1 << self.id;
+            if self.inner.consumers_finished.load(Ordering::Relaxed) & cur_cons_bit != 0 {
+                 #[cfg(not(feature = "alloc"))]
+                self.inner.consumer_wakers[self.id as usize].register(cx.waker());
+                #[cfg(feature = "alloc")]
+                {
+                    let wakers = self.inner.consumer_wakers.lock().unwrap();
+                    if let Some(waker) = wakers.get(self.id as usize) {
+                        waker.register(cx.waker());
+                    }
+                }
+                return Poll::Pending;
+            }
+
+            if self.inner.state.load(Ordering::Acquire) == State::Transformed as u8 {
                 let (buffer, metadata) = unsafe {
-                    // It's safe to get a mutable slice here because of the state machine guarantee.
-                    let buffer_slice = self.storage.slice_mut(0..self.storage.len());
-                    // But we provide an immutable view to the consumer.
+                    let buffer_slice = self.inner.storage.slice_mut(0..self.inner.storage.len());
                     let buffer_ref = &*(buffer_slice as *const [MaybeUninit<u8>] as *const [u8]);
-                    let metadata_ref = (*self.payload_metadata.get()).unwrap();
+                    let metadata_ref = (*self.inner.payload_metadata.get()).unwrap();
                     (buffer_ref, metadata_ref)
                 };
                 Poll::Ready(ReadPayload::new(buffer, metadata, self))
             } else {
-                self.consumer_waker.register(cx.waker());
+                 #[cfg(not(feature = "alloc"))]
+                self.inner.consumer_wakers[self.id as usize].register(cx.waker());
+                #[cfg(feature = "alloc")]
+                {
+                    let wakers = self.inner.consumer_wakers.lock().unwrap();
+                    if let Some(waker) = wakers.get(self.id as usize) {
+                        waker.register(cx.waker());
+                    }
+                }
                 Poll::Pending
             }
         }).await
     }
 
-    fn release_read(&'b self, remaining_length: usize) {
-        trace!("Consumer releasing read slot");
+    fn release_read(&self, remaining_length: usize) {
+        trace!("Consumer {} releasing read slot", self.id);
         if remaining_length > 0 {
             panic!("Consumer must consume all data in the slot. Partial consumption is not supported in Slot.");
         }
-        // After reading, the slot is always returned to the `Empty` state.
-        self.state.store(State::Empty as u8, Ordering::Release);
-        // Wake the producer to start the cycle again.
-        self.producer_waker.wake();
+
+        let cur_cons_bit = 1 << self.id;
+        let finished_mask = self.inner.consumers_finished.fetch_or(cur_cons_bit, Ordering::AcqRel);
+
+        let new_mask = finished_mask | cur_cons_bit;
+        
+        let registration: Registration = self.inner.registered.load(Ordering::Relaxed).into();
+        let consumer_count = registration.consumer_count();
+        let registered_mask = (1 << consumer_count) - 1;
+        
+        if new_mask == registered_mask {
+            trace!("Last consumer finished. Resetting slot.");
+            self.inner.state.store(State::Empty as u8, Ordering::Release);
+            self.inner.producer_waker.wake();
+        }
     }
 }
 
@@ -264,111 +361,157 @@ mod tests {
     use super::*;
     use std::convert::TryFrom;
     use std::sync::atomic::Ordering;
+    use std::sync::Arc;
 
     use tokio::sync::oneshot;
     use tokio::time::{timeout, Duration};
 
-    /// Helper function to get the current state as a `State` enum.
     fn get_current_state<S: Storage<Item = u8>>(slot: &Slot<S>) -> State {
         State::try_from(slot.state.load(Ordering::SeqCst)).unwrap()
     }
 
-    /// Test case 1: A simple pipeline without a transformer using a static buffer.
     #[tokio::test]
     async fn test_producer_consumer_flow_no_transformer() {
-        // Configure the slot for a pipeline with NO transformer.
-        let mut slot: StaticSlot<8> = StaticSlot::new_static();
-        slot.register(Operation::Produce, PayloadSize { preferred: 4, min: 4 });
-        slot.register(Operation::Consume, PayloadSize { preferred: 4, min: 4 });
-        let static_slot: &'static Slot<_> = Box::leak(Box::new(slot));
+        let slot: StaticSlot<8> = StaticSlot::new_static();
+        let slot = Arc::new(slot);
+        
+        let producer = ProducerHandle::new(slot.clone(), PayloadSize { preferred: 4, min: 4 });
+        let consumer = ConsumerHandle::new(slot.clone(), PayloadSize { preferred: 4, min: 4 });
 
-        // Spawn a consumer that waits for data.
         let consumer_handle = tokio::spawn(async move {
-            let payload = static_slot.acquire_read().await;
+            let payload = consumer.acquire_read().await;
             assert_eq!(payload.len(), 4);
             assert_eq!(&payload[..], &[1, 2, 3, 4]);
+            consumer.release_read(0);
         });
 
-        // The producer acquires the slot for writing.
-        let mut write_payload = static_slot.acquire_write().await;
-        assert_eq!(get_current_state(static_slot), State::Writing);
+        let mut write_payload = producer.acquire_write().await;
+        assert_eq!(get_current_state(&slot), State::Writing);
         write_payload[0..4].copy_from_slice(&[1, 2, 3, 4]);
         write_payload.set_valid_length(4);
         
         drop(write_payload);
-        assert_eq!(get_current_state(static_slot), State::Transformed);
+        assert_eq!(get_current_state(&slot), State::Transformed);
 
         timeout(Duration::from_millis(100), consumer_handle).await.expect("Consumer timed out").unwrap();
         
-        assert_eq!(get_current_state(static_slot), State::Empty);
+        assert_eq!(get_current_state(&slot), State::Empty);
     }
 
-    /// Test case 2: A full pipeline using a heap-allocated buffer.
     #[tokio::test]
+    #[cfg(feature="alloc")]
     async fn test_full_pipeline_flow_with_transformer_heap() {
-        let mut slot = HeapSlot::new_heap(8);
-        slot.register(Operation::Produce, PayloadSize { preferred: 4, min: 4 });
-        slot.register(Operation::InPlace, PayloadSize { preferred: 4, min: 4 });
-        slot.register(Operation::Consume, PayloadSize { preferred: 4, min: 4 });
-        let static_slot: &'static Slot<_> = Box::leak(Box::new(slot));
+        let slot = HeapSlot::new_heap(8);
+        let slot = Arc::new(slot);
+
+        let producer = ProducerHandle::new(slot.clone(), PayloadSize { preferred: 4, min: 4 });
+        let transformer = TransformerHandle::new(slot.clone(), PayloadSize { preferred: 4, min: 4 });
+        let consumer = ConsumerHandle::new(slot.clone(), PayloadSize { preferred: 4, min: 4 });
 
         let (tx, rx) = oneshot::channel();
 
         let consumer_handle = tokio::spawn(async move {
             rx.await.expect("Failed to receive signal");
-            let payload = static_slot.acquire_read().await;
+            let payload = consumer.acquire_read().await;
             assert_eq!(payload.len(), 4);
             assert_eq!(&payload[..], &[11, 12, 13, 14]);
+            consumer.release_read(0);
         });
         
         let transformer_handle = tokio::spawn(async move {
-            let mut payload = static_slot.acquire_transform().await;
+            let mut payload = transformer.acquire_transform().await;
             assert_eq!(&payload[..], &[1, 2, 3, 4]);
             for byte in payload.iter_mut() {
                 *byte += 10;
             }
+            transformer.release_transform(payload.metadata, 0);
         });
 
-        let mut write_payload = static_slot.acquire_write().await;
+        let mut write_payload = producer.acquire_write().await;
         write_payload[0..4].copy_from_slice(&[1, 2, 3, 4]);
         write_payload.set_valid_length(4);
         
         drop(write_payload);
-        assert_eq!(get_current_state(static_slot), State::Full);
+        assert_eq!(get_current_state(&slot), State::Full);
 
         timeout(Duration::from_millis(100), transformer_handle).await.expect("Transformer timed out").unwrap();
         
-        assert_eq!(get_current_state(static_slot), State::Transformed);
+        assert_eq!(get_current_state(&slot), State::Transformed);
 
         tx.send(()).unwrap();
 
         timeout(Duration::from_millis(100), consumer_handle).await.expect("Consumer task timed out").unwrap();
 
-        assert_eq!(get_current_state(static_slot), State::Empty);
+        assert_eq!(get_current_state(&slot), State::Empty);
     }
-
-    /// Test case 3: Verify that the consumer waits for the transformer.
+    
     #[tokio::test]
     async fn test_consumer_waits_for_transformer_when_configured() {
-        let mut slot: StaticSlot<8> = StaticSlot::new_static();
-        slot.register(Operation::InPlace, PayloadSize { preferred: 4, min: 4 });
-        slot.register(Operation::Produce, PayloadSize { preferred: 4, min: 4 });
-        slot.register(Operation::Consume, PayloadSize { preferred: 4, min: 4 });
-        let static_slot: &'static Slot<_> = Box::leak(Box::new(slot));
+        let slot: StaticSlot<8> = StaticSlot::new_static();
+        let slot = Arc::new(slot);
+
+        let producer = ProducerHandle::new(slot.clone(), PayloadSize { preferred: 4, min: 4 });
+        TransformerHandle::new(slot.clone(), PayloadSize { preferred: 4, min: 4 });
+        let consumer = ConsumerHandle::new(slot.clone(), PayloadSize { preferred: 4, min: 4 });
 
         let consumer_handle = tokio::spawn(async move {
-            static_slot.acquire_read().await;
+            consumer.acquire_read().await;
         });
 
         tokio::task::yield_now().await;
 
-        let mut write_payload = static_slot.acquire_write().await;
+        let mut write_payload = producer.acquire_write().await;
         write_payload.set_valid_length(4);
         drop(write_payload);
         
-        assert_eq!(get_current_state(static_slot), State::Full);
+        assert_eq!(get_current_state(&slot), State::Full);
 
         let result = timeout(Duration::from_millis(50), consumer_handle).await;
         assert!(result.is_err(), "Consumer did not wait for transformer and acquired the slot early");
+    }
+
+    #[tokio::test]
+    async fn test_two_consumers_flow() {
+        let slot: StaticSlot<8> = StaticSlot::new_static();
+        let slot = Arc::new(slot);
+
+        let producer = ProducerHandle::new(slot.clone(), PayloadSize { preferred: 4, min: 4 });
+        let consumer1 = ConsumerHandle::new(slot.clone(), PayloadSize { preferred: 4, min: 4 });
+        let consumer2 = ConsumerHandle::new(slot.clone(), PayloadSize { preferred: 4, min: 4 });
+        
+        let producer_handle = tokio::spawn({
+            async move {
+                let mut write_payload = producer.acquire_write().await;
+                write_payload[0..4].copy_from_slice(&[10, 20, 30, 40]);
+                write_payload.set_valid_length(4);
+            }
+        });
+
+        producer_handle.await.unwrap();
+        assert_eq!(get_current_state(&slot), State::Transformed);
+
+        let (c1_tx, c1_rx) = oneshot::channel();
+
+        let consumer1_handle = tokio::spawn(async move {
+            let payload = consumer1.acquire_read().await;
+            assert_eq!(&payload[..], &[10, 20, 30, 40]);
+            c1_tx.send(()).unwrap();
+            consumer1.release_read(0);
+        });
+
+        let consumer2_handle = tokio::spawn(async move {
+            c1_rx.await.unwrap();
+            let payload = consumer2.acquire_read().await;
+            assert_eq!(&payload[..], &[10, 20, 30, 40]);
+            consumer2.release_read(0);
+        });
+
+        consumer1_handle.await.unwrap();
+
+        assert_ne!(get_current_state(&slot), State::Empty);
+
+        consumer2_handle.await.unwrap();
+
+        assert_eq!(get_current_state(&slot), State::Empty);
     }
 }

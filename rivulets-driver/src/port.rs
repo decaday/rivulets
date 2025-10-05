@@ -1,4 +1,4 @@
-use crate::databus::{Consumer, Operation, Producer, Transformer};
+use crate::databus::{Consumer, Producer, Transformer};
 use crate::payload::{Metadata, ReadPayload, TransformPayload, WritePayload};
 
 /// Represents an input port for an `Element`.
@@ -132,7 +132,13 @@ pub struct Dmy;
 // --- Dummy Trait Implementations for Dmy ---
 
 impl<'a> crate::databus::Databus for Dmy {
-    fn register(&mut self, _operation: Operation, _payload_size: PayloadSize) {
+    fn do_register_producer(&self, _payload_size: PayloadSize) {
+        unimplemented!()
+    }
+    fn do_register_consumer(&self, _payload_size: PayloadSize) -> u8 {
+        unimplemented!()
+    }
+    fn do_register_transformer(&self, _payload_size: PayloadSize) {
         unimplemented!()
     }
 }
