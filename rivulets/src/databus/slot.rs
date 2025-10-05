@@ -43,8 +43,7 @@ enum State {
     Writing,
     Full,
     Transforming,
-    Transformed,
-    Reading,
+    ReadyForRead,
 }
 
 impl From<State> for u8 {
@@ -59,11 +58,10 @@ impl TryFrom<u8> for State {
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         match value {
             x if x == State::Empty as u8 => Ok(State::Empty),
-            x if x == State::Reading as u8 => Ok(State::Reading),
             x if x == State::Writing as u8 => Ok(State::Writing),
             x if x == State::Full as u8 => Ok(State::Full),
             x if x == State::Transforming as u8 => Ok(State::Transforming),
-            x if x == State::Transformed as u8 => Ok(State::Transformed),
+            x if x == State::ReadyForRead as u8 => Ok(State::ReadyForRead),
             _ => Err(()),
         }
     }
@@ -226,7 +224,7 @@ impl<'a, S: Storage<Item = u8> + 'a> Producer<'a> for ProducerHandle<Slot<S>> {
             self.inner.transformer_waker.wake();
         } else {
             self.inner.consumers_finished.store(0, Ordering::Relaxed);
-            self.inner.state.store(State::Transformed as u8, Ordering::Release);
+            self.inner.state.store(State::ReadyForRead as u8, Ordering::Release);
             #[cfg(not(feature = "alloc"))]
             for i in 0..registration.consumer_count() as usize {
                 self.inner.consumer_wakers[i].wake();
@@ -275,7 +273,7 @@ impl<'a, S: Storage<Item = u8> + 'a> Transformer<'a> for TransformerHandle<Slot<
             *self.inner.payload_metadata.get() = Some(metadata);
         }
         self.inner.consumers_finished.store(0, Ordering::Relaxed);
-        self.inner.state.store(State::Transformed as u8, Ordering::Release);
+        self.inner.state.store(State::ReadyForRead as u8, Ordering::Release);
         
         #[cfg(not(feature = "alloc"))] {
             let registration: Registration = self.inner.registered.load(Ordering::Relaxed).into();
@@ -309,7 +307,7 @@ impl<'a, S: Storage<Item = u8> + 'a> Consumer<'a> for ConsumerHandle<Slot<S>> {
                 return Poll::Pending;
             }
 
-            if self.inner.state.load(Ordering::Acquire) == State::Transformed as u8 {
+            if self.inner.state.load(Ordering::Acquire) == State::ReadyForRead as u8 {
                 let (buffer, metadata) = unsafe {
                     let buffer_slice = self.inner.storage.slice_mut(0..self.inner.storage.len());
                     let buffer_ref = &*(buffer_slice as *const [MaybeUninit<u8>] as *const [u8]);
@@ -391,7 +389,7 @@ mod tests {
         write_payload.set_valid_length(4);
         
         drop(write_payload);
-        assert_eq!(get_current_state(&slot), State::Transformed);
+        assert_eq!(get_current_state(&slot), State::ReadyForRead);
 
         timeout(Duration::from_millis(100), consumer_handle).await.expect("Consumer timed out").unwrap();
         
@@ -436,7 +434,7 @@ mod tests {
 
         timeout(Duration::from_millis(100), transformer_handle).await.expect("Transformer timed out").unwrap();
         
-        assert_eq!(get_current_state(&slot), State::Transformed);
+        assert_eq!(get_current_state(&slot), State::ReadyForRead);
 
         tx.send(()).unwrap();
 
@@ -488,14 +486,13 @@ mod tests {
         });
 
         producer_handle.await.unwrap();
-        assert_eq!(get_current_state(&slot), State::Transformed);
+        assert_eq!(get_current_state(&slot), State::ReadyForRead);
 
         let (c1_tx, c1_rx) = oneshot::channel();
 
         let consumer1_handle = tokio::spawn(async move {
             let payload = consumer1.acquire_read().await;
             assert_eq!(&payload[..], &[10, 20, 30, 40]);
-            c1_tx.send(()).unwrap();
             consumer1.release_read(0);
         });
 
@@ -508,7 +505,8 @@ mod tests {
 
         consumer1_handle.await.unwrap();
 
-        assert_ne!(get_current_state(&slot), State::Empty);
+        assert_eq!(get_current_state(&slot), State::ReadyForRead);
+        c1_tx.send(()).unwrap();
 
         consumer2_handle.await.unwrap();
 
