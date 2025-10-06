@@ -1,3 +1,5 @@
+use core::marker::PhantomData;
+
 use crate::databus::{Consumer, Producer, Transformer};
 use crate::payload::{Metadata, ReadPayload, TransformPayload, WritePayload};
 
@@ -6,9 +8,10 @@ use crate::payload::{Metadata, ReadPayload, TransformPayload, WritePayload};
 /// An `Element` can receive data from a `Consumer`, which provides data payloads.
 pub enum InPort<'a, C: Consumer<'a>> {
     /// An upstream databus component that implements the `Consumer` trait.
-    Consumer(&'a C),
+    Consumer(C),
     /// Represents no input, typically for source elements like generators.
     None,
+    _Phantom(PhantomData<&'a ()>),
 }
 
 impl InPort<'_, Dmy> {
@@ -28,9 +31,10 @@ impl Default for InPort<'_, Dmy> {
 /// An `Element` can send data to a `Producer`, which accepts data payloads.
 pub enum OutPort<'a, P: Producer<'a>> {
     /// A downstream databus component that implements the `Producer` trait.
-    Producer(&'a P),
+    Producer(P),
     /// Represents no output, typically for sink elements.
     None,
+    _Phantom(PhantomData<&'a ()>),
 }
 
 impl OutPort<'_, Dmy> {
@@ -51,9 +55,10 @@ impl Default for OutPort<'_, Dmy> {
 /// This is typically used for effects or filters that modify data in place.
 pub enum InPlacePort<'a, T: Transformer<'a>> {
     /// A databus component that implements the `Transformer` trait.
-    Transformer(&'a T),
+    Transformer(T),
     /// Represents no in-place transformation.
     None,
+    _Phantom(PhantomData<&'a ()>),
 }
 
 impl InPlacePort<'_, Dmy> {

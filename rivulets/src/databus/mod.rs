@@ -1,70 +1,39 @@
-#[cfg(feature="alloc")]
-use std::sync::Arc;
+use core::ops::Deref;
 
 use rivulets_driver::databus::Databus;
 use rivulets_driver::port::PayloadSize;
 
 pub mod slot;
 
-pub struct ProducerHandle<D: Databus> {
-    #[cfg(not(feature="alloc"))]
-    pub inner: &'static D,
-    #[cfg(feature="alloc")]
-    pub inner: Arc<D>,
+pub struct ProducerHandle<D: Databus, P: Deref<Target=D> + Clone> {
+    pub inner: P,
 }
 
-pub struct ConsumerHandle<D: Databus> {
-    #[cfg(not(feature="alloc"))]
-    pub inner: &'static D,
-    #[cfg(feature="alloc")]
-    pub inner: Arc<D>,
+pub struct ConsumerHandle<D: Databus, P: Deref<Target=D> + Clone> {
+    pub inner: P,
     pub id: u8,
 }
 
-pub struct TransformerHandle<D: Databus> {
-    #[cfg(not(feature="alloc"))]
-    pub inner: &'static D,
-    #[cfg(feature="alloc")]
-    pub inner: Arc<D>,
+pub struct TransformerHandle<D: Databus, P: Deref<Target=D> + Clone> {
+    pub inner: P,
 }
 
-impl<D: Databus> ProducerHandle<D> {
-    #[cfg(not(feature="alloc"))]
-    pub fn new(databus: &'static D, payload_size: PayloadSize) -> Self {
-        databus.do_register_producer(payload_size);
-        Self { inner: databus }
-    }
-
-    #[cfg(feature="alloc")]
-    pub fn new(databus: Arc<D>, payload_size: PayloadSize) -> Self {
+impl<D: Databus, P: Deref<Target=D> + Clone> ProducerHandle<D, P> {
+    pub fn new(databus: P, payload_size: PayloadSize) -> Self {
         databus.do_register_producer(payload_size);
         Self { inner: databus }
     }
 }
 
-impl<D: Databus> ConsumerHandle<D> {
-    #[cfg(not(feature="alloc"))]
-    pub fn new(databus: &'static D, payload_size: PayloadSize) -> Self {
-        let id = databus.do_register_consumer(payload_size);
-        Self { inner: databus, id }
-    }
-
-    #[cfg(feature="alloc")]
-    pub fn new(databus: Arc<D>, payload_size: PayloadSize) -> Self {
+impl<D: Databus, P: Deref<Target=D> + Clone> ConsumerHandle<D, P> {
+    pub fn new(databus: P, payload_size: PayloadSize) -> Self {
         let id = databus.do_register_consumer(payload_size);
         Self { inner: databus, id }
     }
 }
 
-impl<D: Databus> TransformerHandle<D> {
-    #[cfg(not(feature="alloc"))]
-    pub fn new(databus: &'static D, payload_size: PayloadSize) -> Self {
-        databus.do_register_transformer(payload_size);
-        Self { inner: databus }
-    }
-
-    #[cfg(feature="alloc")]
-    pub fn new(databus: Arc<D>, payload_size: PayloadSize) -> Self {
+impl<D: Databus, P: Deref<Target=D> + Clone> TransformerHandle<D, P> {
+    pub fn new(databus: P, payload_size: PayloadSize) -> Self {
         databus.do_register_transformer(payload_size);
         Self { inner: databus }
     }

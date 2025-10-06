@@ -38,7 +38,7 @@ pub trait Consumer<'a>: Sized {
     // }
 
     /// Helper to create an `InPort` for this `Consumer`.
-    fn in_port(&'a self) -> InPort<'a, Self> {
+    fn in_port(self) -> InPort<'a, Self> {
         InPort::Consumer(self)
     }
 }
@@ -58,7 +58,7 @@ pub trait Producer<'a>: Sized {
     fn release_write(&'a self, metadata: Metadata);
 
     /// Helper to create an `OutPort` for this `Producer`.
-    fn out_port(&'a self) -> OutPort<'a, Self> {
+    fn out_port(self) -> OutPort<'a, Self> {
         OutPort::Producer(self)
     }
 }
@@ -79,7 +79,7 @@ pub trait Transformer<'a>: Sized {
     fn release_transform(&'a self, metadata: Metadata, remaining_length: usize);
 
     /// Helper to create an `InPlacePort` for this `Transformer`.
-    fn in_place_port(&'a self) -> InPlacePort<'a, Self> {
+    fn in_place_port(self) -> InPlacePort<'a, Self> {
         InPlacePort::Transformer(self)
     }
 }

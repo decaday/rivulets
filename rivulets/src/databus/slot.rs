@@ -3,6 +3,7 @@
 use core::cell::UnsafeCell;
 use core::future::poll_fn;
 use core::mem::MaybeUninit;
+use core::ops::Deref;
 use core::task::Poll;
 
 use bitfield_struct::bitfield;
@@ -195,7 +196,11 @@ impl<const N: usize> Slot<Array<u8, N>> {
     }
 }
 
-impl<'a, S: Storage<Item = u8> + 'a> Producer<'a> for ProducerHandle<Slot<S>> {
+impl<'a, S, P> Producer<'a> for ProducerHandle<Slot<S>, P> 
+where 
+    S: Storage<Item = u8> + 'a,
+    P: Deref<Target=Slot<S>> + Clone,
+{
     async fn acquire_write(&'a self) -> WritePayload<'a, Self> {
         let registration: Registration = self.inner.registered.load(Ordering::Relaxed).into();
         assert!(registration.producer(), "acquire_write called on a Slot configured without a producer");
@@ -240,7 +245,11 @@ impl<'a, S: Storage<Item = u8> + 'a> Producer<'a> for ProducerHandle<Slot<S>> {
     }
 }
 
-impl<'a, S: Storage<Item = u8> + 'a> Transformer<'a> for TransformerHandle<Slot<S>> {
+impl<'a, S, P> Transformer<'a> for TransformerHandle<Slot<S>, P> 
+where 
+    S: Storage<Item = u8> + 'a,
+    P: Deref<Target=Slot<S>> + Clone,
+{
     async fn acquire_transform(&'a self) -> TransformPayload<'a, Self> {
         let registration: Registration = self.inner.registered.load(Ordering::Relaxed).into();
         assert!(registration.transformer(), "acquire_transform called on a Slot configured without a transformer");
@@ -290,7 +299,11 @@ impl<'a, S: Storage<Item = u8> + 'a> Transformer<'a> for TransformerHandle<Slot<
     }
 }
 
-impl<'a, S: Storage<Item = u8> + 'a> Consumer<'a> for ConsumerHandle<Slot<S>> {
+impl<'a, S, P> Consumer<'a> for ConsumerHandle<Slot<S>, P> 
+where 
+    S: Storage<Item = u8> + 'a,
+    P: Deref<Target=Slot<S>> + Clone,
+{
     async fn acquire_read(&'a self) -> ReadPayload<'a, Self> {
         poll_fn(|cx| {
             let cur_cons_bit: u8 = 1 << self.id;
@@ -371,10 +384,10 @@ mod tests {
     #[tokio::test]
     async fn test_producer_consumer_flow_no_transformer() {
         let slot: StaticSlot<8> = StaticSlot::new_static();
-        let slot = Arc::new(slot);
+        let static_slot: &'static Slot<_> = Box::leak(Box::new(slot));
         
-        let producer = ProducerHandle::new(slot.clone(), PayloadSize { preferred: 4, min: 4 });
-        let consumer = ConsumerHandle::new(slot.clone(), PayloadSize { preferred: 4, min: 4 });
+        let producer = ProducerHandle::new(static_slot, PayloadSize { preferred: 4, min: 4 });
+        let consumer = ConsumerHandle::new(static_slot, PayloadSize { preferred: 4, min: 4 });
 
         let consumer_handle = tokio::spawn(async move {
             let payload = consumer.acquire_read().await;
@@ -384,16 +397,16 @@ mod tests {
         });
 
         let mut write_payload = producer.acquire_write().await;
-        assert_eq!(get_current_state(&slot), State::Writing);
+        assert_eq!(get_current_state(static_slot), State::Writing);
         write_payload[0..4].copy_from_slice(&[1, 2, 3, 4]);
         write_payload.set_valid_length(4);
         
         drop(write_payload);
-        assert_eq!(get_current_state(&slot), State::ReadyForRead);
+        assert_eq!(get_current_state(static_slot), State::ReadyForRead);
 
         timeout(Duration::from_millis(100), consumer_handle).await.expect("Consumer timed out").unwrap();
         
-        assert_eq!(get_current_state(&slot), State::Empty);
+        assert_eq!(get_current_state(static_slot), State::Empty);
     }
 
     #[tokio::test]
