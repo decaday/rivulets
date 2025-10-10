@@ -22,16 +22,17 @@ pub trait Element {
     /// Returns `None` if this is a sink element.
     fn get_out_info(&self) -> Option<Self::Info>;
 
+    fn get_port_requirements(&self) -> PortRequirements;
+
     /// Returns the amount of available data for processing.
     /// The unit (e.g., bytes, frames) depends on the element's nature.
     fn available(&self) -> u32;
 
     /// Initializes the element based on metadata from the upstream element.
     /// Returns its own port requirements upon successful initialization.
-    async fn initialize(
-        &mut self,
-        upstream_info: Option<Self::Info>,
-    ) -> Result<PortRequirements, Self::Error>;
+    async fn initialize(&mut self) -> Result<(), Self::Error> {
+        Ok(())
+    }
 
     /// Flushes any internal buffers of the element.
     async fn flush(&mut self) -> Result<(), Self::Error> {
@@ -49,9 +50,9 @@ pub trait Element {
     /// processing, by acquiring and releasing payloads from the databus.
     async fn process<'a, C, P, T>(
         &mut self,
-        in_port: &mut InPort<'a, C>,
-        out_port: &mut OutPort<'a, P>,
-        in_place_port: &mut InPlacePort<'a, T>,
+        in_port: &'a InPort<'a, C>,
+        out_port: &'a mut OutPort<'a, P>,
+        in_place_port: &'a mut InPlacePort<'a, T>,
     ) -> ProcessResult<Self::Error>
     where
         C: Consumer<'a>,

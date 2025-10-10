@@ -75,7 +75,7 @@ pub enum Position {
 /// When this guard is dropped, the buffer is automatically released back to the `Consumer`.
 /// This payload provides immutable access to the data.
 pub struct ReadPayload<'a, C: Consumer<'a>> {
-    data: &'a [u8],
+    pub data: &'a [u8],
     pub metadata: Metadata,
     remaining_length: usize,
     consumer: &'a C,
@@ -88,6 +88,10 @@ impl<'a, C: Consumer<'a>> ReadPayload<'a, C> {
 
     pub fn set_remaining_length(&mut self, length: usize) {
         self.remaining_length = length;
+    }
+
+    pub fn position(&self) -> Position {
+        self.metadata.position
     }
 }
 

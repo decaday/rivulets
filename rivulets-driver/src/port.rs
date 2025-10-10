@@ -26,6 +26,22 @@ impl Default for InPort<'_, Dmy> {
     }
 }
 
+impl<'a, C: Consumer<'a>> InPort<'a, C> {
+    pub fn unwrap(self) -> C {
+        match self {
+            Self::Consumer(val) => val,
+            _ => panic!("called `InPort::unwrap()` on a `None` value"),
+        }
+    }
+
+    pub fn consumer_ref<'b>(&'b self) -> &'b C {
+        match self {
+            Self::Consumer(val) => val,
+            _ => panic!("called `InPort::as_ref()` on a `None` value"),
+        }
+    }
+}
+
 /// Represents an output port for an `Element`.
 ///
 /// An `Element` can send data to a `Producer`, which accepts data payloads.
@@ -46,6 +62,22 @@ impl OutPort<'_, Dmy> {
 impl Default for OutPort<'_, Dmy> {
     fn default() -> Self {
         OutPort::None
+    }
+}
+
+impl<'a, P: Producer<'a>> OutPort<'a, P> {
+    pub fn unwrap(self) -> P {
+        match self {
+            Self::Producer(val) => val,
+            _ => panic!("called `OutPort::unwrap()` on a `None` value"),
+        }
+    }
+
+    pub fn producer_ref<'b>(&'b self) -> &'b P {
+        match self {
+            Self::Producer(val) => val,
+            _ => panic!("called `InPort::as_ref()` on a `None` value"),
+        }
     }
 }
 
