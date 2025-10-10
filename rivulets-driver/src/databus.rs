@@ -21,65 +21,65 @@ pub trait Databus {
 
 /// A trait for components from which audio data can be read asynchronously.
 #[allow(async_fn_in_trait)]
-pub trait Consumer<'a>: Sized {
+pub trait Consumer: Sized {
     /// Asynchronously acquires a payload for reading data.
     ///
     /// This function will wait until data is available in the databus.
-    async fn acquire_read(&'a self) -> ReadPayload<'a, Self>;
+    async fn acquire_read<'a>(&'a self) -> ReadPayload<'a, Self>;
 
     /// Called by `ReadPayload` when it is dropped to release the buffer.
     ///
     /// This method is intended for internal use by the payload's RAII mechanism
     /// and should not be called directly by the user.
-    fn release_read(&'a self, remaining_length: usize);
+    fn release_read(&self, remaining_length: usize);
 
     // fn is_transformer_configured(&self) -> bool {
     //     false
     // }
 
     /// Helper to create an `InPort` for this `Consumer`.
-    fn in_port(self) -> InPort<'a, Self> {
+    fn in_port(self) -> InPort<Self> {
         InPort::Consumer(self)
     }
 }
 
 /// A trait for components to which audio data can be written asynchronously.
 #[allow(async_fn_in_trait)]
-pub trait Producer<'a>: Sized {
+pub trait Producer: Sized {
     /// Asynchronously acquires a payload for writing data.
     ///
     /// This function will wait until space is available in the databus.
-    async fn acquire_write(&'a self) -> WritePayload<'a, Self>;
+    async fn acquire_write<'a>(&'a self) -> WritePayload<'a, Self>;
 
     /// Called by `WritePayload` when it is dropped to commit the written data.
     ///
     /// This method is intended for internal use by the payload's RAII mechanism
     /// and should not be called directly by the user.
-    fn release_write(&'a self, metadata: Metadata);
+    fn release_write(&self, metadata: Metadata);
 
     /// Helper to create an `OutPort` for this `Producer`.
-    fn out_port(self) -> OutPort<'a, Self> {
+    fn out_port(self) -> OutPort<Self> {
         OutPort::Producer(self)
     }
 }
 
 /// A trait for components that support in-place modification of a buffer.
 #[allow(async_fn_in_trait)]
-pub trait Transformer<'a>: Sized {
+pub trait Transformer: Sized {
     /// Asynchronously acquires a payload for in-place transformation.
     ///
     /// This operation will wait until the databus contains data that is ready
     /// to be processed.
-    async fn acquire_transform(&'a self) -> TransformPayload<'a, Self>;
+    async fn acquire_transform<'a>(&'a self) -> TransformPayload<'a, Self>;
 
     /// Called by `TransformPayload` when it is dropped to finalize the transformation.
     ///
     /// This method is intended for internal use by the payload's RAII mechanism
     /// and should not be called directly by the user.
-    fn release_transform(&'a self, metadata: Metadata, remaining_length: usize);
+    fn release_transform(&self, metadata: Metadata, remaining_length: usize);
 
     /// Helper to create an `InPlacePort` for this `Transformer`.
-    fn in_place_port(self) -> InPlacePort<'a, Self> {
+    fn in_place_port(self) -> InPlacePort<Self> {
         InPlacePort::Transformer(self)
     }
 }

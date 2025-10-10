@@ -48,16 +48,16 @@ pub trait Element {
     ///
     /// It takes an `InPort`, an `OutPort`, and an `InPlacePort` to perform one step of data
     /// processing, by acquiring and releasing payloads from the databus.
-    async fn process<'a, C, P, T>(
+    async fn process<C, P, T>(
         &mut self,
-        in_port: &'a InPort<'a, C>,
-        out_port: &'a mut OutPort<'a, P>,
-        in_place_port: &'a mut InPlacePort<'a, T>,
+        in_port: &InPort<C>,
+        out_port: &mut OutPort<P>,
+        in_place_port: &mut InPlacePort<T>,
     ) -> ProcessResult<Self::Error>
     where
-        C: Consumer<'a>,
-        P: Producer<'a>,
-        T: Transformer<'a>;
+        C: Consumer,
+        P: Producer,
+        T: Transformer;
 }
 
 /// Represents the status of a `process` call.

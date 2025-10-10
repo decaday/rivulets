@@ -1,32 +1,29 @@
-use core::marker::PhantomData;
-
 use crate::databus::{Consumer, Producer, Transformer};
 use crate::payload::{Metadata, ReadPayload, TransformPayload, WritePayload};
 
 /// Represents an input port for an `Element`.
 ///
 /// An `Element` can receive data from a `Consumer`, which provides data payloads.
-pub enum InPort<'a, C: Consumer<'a>> {
+pub enum InPort<C: Consumer> {
     /// An upstream databus component that implements the `Consumer` trait.
     Consumer(C),
     /// Represents no input, typically for source elements like generators.
     None,
-    _Phantom(PhantomData<&'a ()>),
 }
 
-impl InPort<'_, Dmy> {
+impl InPort<Dmy> {
     pub fn new_none() -> Self {
         InPort::None
     }
 }
 
-impl Default for InPort<'_, Dmy> {
+impl Default for InPort<Dmy> {
     fn default() -> Self {
         InPort::None
     }
 }
 
-impl<'a, C: Consumer<'a>> InPort<'a, C> {
+impl<C: Consumer> InPort<C> {
     pub fn unwrap(self) -> C {
         match self {
             Self::Consumer(val) => val,
@@ -34,7 +31,7 @@ impl<'a, C: Consumer<'a>> InPort<'a, C> {
         }
     }
 
-    pub fn consumer_ref<'b>(&'b self) -> &'b C {
+    pub fn consumer_ref(&self) -> &C {
         match self {
             Self::Consumer(val) => val,
             _ => panic!("called `InPort::as_ref()` on a `None` value"),
@@ -45,27 +42,26 @@ impl<'a, C: Consumer<'a>> InPort<'a, C> {
 /// Represents an output port for an `Element`.
 ///
 /// An `Element` can send data to a `Producer`, which accepts data payloads.
-pub enum OutPort<'a, P: Producer<'a>> {
+pub enum OutPort<P: Producer> {
     /// A downstream databus component that implements the `Producer` trait.
     Producer(P),
     /// Represents no output, typically for sink elements.
     None,
-    _Phantom(PhantomData<&'a ()>),
 }
 
-impl OutPort<'_, Dmy> {
+impl OutPort<Dmy> {
     pub fn new_none() -> Self {
         OutPort::None
     }
 }
 
-impl Default for OutPort<'_, Dmy> {
+impl Default for OutPort<Dmy> {
     fn default() -> Self {
         OutPort::None
     }
 }
 
-impl<'a, P: Producer<'a>> OutPort<'a, P> {
+impl<P: Producer> OutPort<P> {
     pub fn unwrap(self) -> P {
         match self {
             Self::Producer(val) => val,
@@ -73,7 +69,7 @@ impl<'a, P: Producer<'a>> OutPort<'a, P> {
         }
     }
 
-    pub fn producer_ref<'b>(&'b self) -> &'b P {
+    pub fn producer_ref(&self) -> &P {
         match self {
             Self::Producer(val) => val,
             _ => panic!("called `InPort::as_ref()` on a `None` value"),
@@ -85,21 +81,20 @@ impl<'a, P: Producer<'a>> OutPort<'a, P> {
 ///
 /// An `Element` can perform in-place transformations using a `Transformer`.
 /// This is typically used for effects or filters that modify data in place.
-pub enum InPlacePort<'a, T: Transformer<'a>> {
+pub enum InPlacePort<T: Transformer> {
     /// A databus component that implements the `Transformer` trait.
     Transformer(T),
     /// Represents no in-place transformation.
     None,
-    _Phantom(PhantomData<&'a ()>),
 }
 
-impl InPlacePort<'_, Dmy> {
+impl InPlacePort<Dmy> {
     pub fn new_none() -> Self {
         InPlacePort::None
     }
 }
 
-impl Default for InPlacePort<'_, Dmy> {
+impl Default for InPlacePort<Dmy> {
     fn default() -> Self {
         InPlacePort::None
     }
@@ -180,8 +175,8 @@ impl<'a> crate::databus::Databus for Dmy {
     }
 }
 
-impl<'a> Consumer<'a> for Dmy {
-    async fn acquire_read(&'a self) -> ReadPayload<'a, Self> {
+impl Consumer for Dmy {
+    async fn acquire_read<'a>(&'a self) -> ReadPayload<'a, Self> {
         unimplemented!()
     }
     fn release_read(&self, _consumed_bytes: usize) {
@@ -189,8 +184,8 @@ impl<'a> Consumer<'a> for Dmy {
     }
 }
 
-impl<'a> Producer<'a> for Dmy {
-    async fn acquire_write(&'a self) -> WritePayload<'a, Self> {
+impl Producer for Dmy {
+    async fn acquire_write<'a>(&'a self) -> WritePayload<'a, Self> {
         unimplemented!()
     }
     fn release_write(&self, _metadata: Metadata) {
@@ -198,8 +193,8 @@ impl<'a> Producer<'a> for Dmy {
     }
 }
 
-impl<'a> Transformer<'a> for Dmy {
-    async fn acquire_transform(&'a self) -> TransformPayload<'a, Self> {
+impl Transformer for Dmy {
+    async fn acquire_transform<'a>(&'a self) -> TransformPayload<'a, Self> {
         unimplemented!()
     }
     fn release_transform(&self, _metadata: Metadata, _remaining_length: usize) {

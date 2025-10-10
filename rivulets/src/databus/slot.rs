@@ -118,12 +118,12 @@ impl<const N: usize> Slot<Array<u8, N>> {
     }
 }
 
-impl<'a, S, P> Producer<'a> for ProducerHandle<Slot<S>, P> 
+impl<S, P> Producer for ProducerHandle<Slot<S>, P> 
 where 
-    S: Storage<Item = u8> + 'a,
+    S: Storage<Item = u8>,
     P: Deref<Target=Slot<S>> + Clone,
 {
-    async fn acquire_write(&'a self) -> WritePayload<'a, Self> {
+    async fn acquire_write<'a>(&'a self) -> WritePayload<'a, Self> {
         self.inner.registry.acquire_write_check();
 
         poll_fn(|cx| {
@@ -157,12 +157,12 @@ where
     }
 }
 
-impl<'a, S, P> Transformer<'a> for TransformerHandle<Slot<S>, P> 
+impl<S, P> Transformer for TransformerHandle<Slot<S>, P> 
 where 
-    S: Storage<Item = u8> + 'a,
+    S: Storage<Item = u8>,
     P: Deref<Target=Slot<S>> + Clone,
 {
-    async fn acquire_transform(&'a self) -> TransformPayload<'a, Self> {
+    async fn acquire_transform<'a>(&'a self) -> TransformPayload<'a, Self> {
         self.inner.registry.acquire_transform_check();
 
         poll_fn(|cx| {
@@ -198,12 +198,12 @@ where
     }
 }
 
-impl<'a, S, P> Consumer<'a> for ConsumerHandle<Slot<S>, P> 
+impl<S, P> Consumer for ConsumerHandle<Slot<S>, P> 
 where 
-    S: Storage<Item = u8> + 'a,
+    S: Storage<Item = u8>,
     P: Deref<Target=Slot<S>> + Clone,
 {
-    async fn acquire_read(&'a self) -> ReadPayload<'a, Self> {
+    async fn acquire_read<'a>(&'a self) -> ReadPayload<'a, Self> {
         self.inner.registry.acquire_read_check();
 
         poll_fn(|cx| {

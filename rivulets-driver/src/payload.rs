@@ -74,14 +74,14 @@ pub enum Position {
 ///
 /// When this guard is dropped, the buffer is automatically released back to the `Consumer`.
 /// This payload provides immutable access to the data.
-pub struct ReadPayload<'a, C: Consumer<'a>> {
+pub struct ReadPayload<'a, C: Consumer> {
     pub data: &'a [u8],
     pub metadata: Metadata,
     remaining_length: usize,
     consumer: &'a C,
 }
 
-impl<'a, C: Consumer<'a>> ReadPayload<'a, C> {
+impl<'a, C: Consumer> ReadPayload<'a, C> {
     pub fn new(data: &'a [u8], metadata: Metadata, consumer: &'a C) -> Self {
         Self { data, metadata, remaining_length: 0, consumer }
     }
@@ -95,9 +95,9 @@ impl<'a, C: Consumer<'a>> ReadPayload<'a, C> {
     }
 }
 
-impl_deref_valid_length!(ReadPayload, <'a, C: Consumer<'a>>);
+impl_deref_valid_length!(ReadPayload, <'a, C: Consumer>);
 
-impl<'a, C: Consumer<'a>> Drop for ReadPayload<'a, C> {
+impl<'a, C: Consumer> Drop for ReadPayload<'a, C> {
     fn drop(&mut self) {
         self.consumer.release_read(self.remaining_length);
     }
@@ -109,13 +109,13 @@ impl<'a, C: Consumer<'a>> Drop for ReadPayload<'a, C> {
 ///
 /// When this guard is dropped, the written data and its metadata are "committed"
 /// back to the `Producer`.
-pub struct WritePayload<'a, P: Producer<'a>> {
+pub struct WritePayload<'a, P: Producer> {
     data: &'a mut [u8],
     pub metadata: Metadata,
     producer: &'a P,
 }
 
-impl<'a, P: Producer<'a>> WritePayload<'a, P> {
+impl<'a, P: Producer> WritePayload<'a, P> {
     pub fn new(data: &'a mut [u8], producer: &'a P) -> Self {
         Self {
             data,
@@ -135,10 +135,10 @@ impl<'a, P: Producer<'a>> WritePayload<'a, P> {
     }
 }
 
-impl_deref_full_data!(WritePayload, <'a, P: Producer<'a>>);
-impl_deref_mut_full_data!(WritePayload, <'a, P: Producer<'a>>);
+impl_deref_full_data!(WritePayload, <'a, P: Producer>);
+impl_deref_mut_full_data!(WritePayload, <'a, P: Producer>);
 
-impl<'a, P: Producer<'a>> Drop for WritePayload<'a, P> {
+impl<'a, P: Producer> Drop for WritePayload<'a, P> {
     fn drop(&mut self) {
         self.producer.release_write(self.metadata);
     }
@@ -150,14 +150,14 @@ impl<'a, P: Producer<'a>> Drop for WritePayload<'a, P> {
 ///
 /// Acquired from a `Transformer`. When this guard is dropped, the transformation is
 /// considered complete, making the buffer available for the next consumer or transformer.
-pub struct TransformPayload<'a, T: Transformer<'a>> {
+pub struct TransformPayload<'a, T: Transformer> {
     data: &'a mut [u8],
     pub metadata: Metadata,
     remaining_length: usize,
     transformer: &'a T,
 }
 
-impl<'a, T: Transformer<'a>> TransformPayload<'a, T> {
+impl<'a, T: Transformer> TransformPayload<'a, T> {
     pub fn new(data: &'a mut [u8], metadata: Metadata, transformer: &'a T) -> Self {
         Self { data, metadata, remaining_length: 0, transformer }
     }
@@ -173,10 +173,10 @@ impl<'a, T: Transformer<'a>> TransformPayload<'a, T> {
     }
 }
 
-impl_deref_valid_length!(TransformPayload, <'a, T: Transformer<'a>>);
-impl_deref_mut_full_data!(TransformPayload, <'a, T: Transformer<'a>>);
+impl_deref_valid_length!(TransformPayload, <'a, T: Transformer>);
+impl_deref_mut_full_data!(TransformPayload, <'a, T: Transformer>);
 
-impl<'a, T: Transformer<'a>> Drop for TransformPayload<'a, T> {
+impl<'a, T: Transformer> Drop for TransformPayload<'a, T> {
     fn drop(&mut self) {
         self.transformer.release_transform(self.metadata, self.remaining_length);
     }
