@@ -7,16 +7,16 @@
 /// flowing through it.
 pub trait Info: core::fmt::Debug + Clone + Copy + PartialEq + Eq {
     // fn is_compatible_with(&self, other: &Self) -> bool;
-    fn vaild(&self) -> bool {
+    fn valid(&self) -> bool {
         true
     }
 
     fn float(&self) -> bool;
 
-    fn bytes_per_simple(&self) -> u8;
+    fn bytes_per_sample(&self) -> u8;
 
     fn alignment_bytes(&self) -> u8 {
-        self.bytes_per_simple() * self.channel_count()
+        self.bytes_per_sample() * self.channel_count()
     }
 
     fn channel_count(&self) -> u8 {
@@ -28,7 +28,7 @@ pub trait Info: core::fmt::Debug + Clone + Copy + PartialEq + Eq {
     }
 
     fn is_f32(&self) -> bool {
-        self.float() & (self.bytes_per_simple() == 4)
+        self.float() & (self.bytes_per_sample() == 4)
     }
 }
 
@@ -37,10 +37,10 @@ pub trait Info: core::fmt::Debug + Clone + Copy + PartialEq + Eq {
 pub struct EmptyInfo;
 
 impl Info for EmptyInfo {
-    fn vaild(&self) -> bool {
+    fn valid(&self) -> bool {
         true
     }
-    fn bytes_per_simple(&self) -> u8 {
+    fn bytes_per_sample(&self) -> u8 {
         1
     }
 

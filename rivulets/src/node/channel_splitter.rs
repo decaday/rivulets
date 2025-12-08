@@ -107,7 +107,7 @@ where
             // Acquire write payloads
             // Note: In a real circular buffer, acquiring two writes sequentially 
             // might lead to deadlock if the graph has cycles or backpressure. 
-            // Be aware of this simple implementation.
+            // Be aware of this sample implementation.
             let mut write_payload1 = self.producer1.acquire_write(actual_len, true).await;
             let mut write_payload2 = self.producer2.acquire_write(actual_len, true).await;
 

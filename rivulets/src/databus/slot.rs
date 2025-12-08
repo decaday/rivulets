@@ -60,7 +60,7 @@ impl TryFrom<u8> for State {
 pub struct Slot<S: Storage> {
     storage: S,
     payload_metadata: UnsafeCell<Option<Metadata>>,
-    // vaild_length: AtomicUsize,
+    // valid_length: AtomicUsize,
     state: AtomicU8,
     registry: ParticipantRegistry<(), (), ()>,
 }
