@@ -83,3 +83,15 @@ pub trait Transformer: Sized {
         InPlacePort::Transformer(self)
     }
 }
+
+pub trait DatabusRef: Deref<Target = Self::Databus> + Clone {
+    type Databus: Databus + Sized;
+}
+
+impl<T> DatabusRef for T
+where
+    T: Deref + Clone,
+    <T as Deref>::Target: Databus + Sized,
+{
+    type Databus = <T as Deref>::Target;
+}
