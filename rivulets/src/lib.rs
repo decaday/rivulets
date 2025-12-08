@@ -3,6 +3,7 @@
 pub mod fmt;
 
 pub mod utils;
+pub mod node;
 pub mod databus;
 
 pub use ringbuf::storage;

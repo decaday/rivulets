@@ -41,6 +41,7 @@ log = ["dep:log", "embassy-sync/log"]
 
 std = [
     "alloc",
+    "log",
     "embedded-io/std", 
     "rivulets-driver/std", 
     # "embassy-time/std",

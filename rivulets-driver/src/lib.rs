@@ -6,6 +6,7 @@ pub mod port;
 pub mod info;
 pub mod databus;
 pub mod payload;
+pub mod node;
 
 #[derive(Debug)]
 pub enum Error {

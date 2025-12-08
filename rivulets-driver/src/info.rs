@@ -11,10 +11,24 @@ pub trait Info: core::fmt::Debug + Clone + Copy + PartialEq + Eq {
         true
     }
 
-    fn get_alignment_bytes(&self) -> u8;
+    fn float(&self) -> bool;
 
-    fn get_channel_count(&self) -> u8 {
+    fn bytes_per_simple(&self) -> u8;
+
+    fn alignment_bytes(&self) -> u8 {
+        self.bytes_per_simple() * self.channel_count()
+    }
+
+    fn channel_count(&self) -> u8 {
         1
+    }
+
+    fn is_mono(&self) -> bool {
+        self.channel_count() == 1
+    }
+
+    fn is_f32(&self) -> bool {
+        self.float() & (self.bytes_per_simple() == 4)
     }
 }
 
@@ -26,8 +40,15 @@ impl Info for EmptyInfo {
     fn vaild(&self) -> bool {
         true
     }
+    fn bytes_per_simple(&self) -> u8 {
+        1
+    }
 
-    fn get_alignment_bytes(&self) -> u8 {
+    fn float(&self) -> bool {
+        false
+    }
+
+    fn alignment_bytes(&self) -> u8 {
         1
     }
 }

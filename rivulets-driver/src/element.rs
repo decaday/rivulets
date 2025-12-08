@@ -14,6 +14,8 @@ pub trait Element {
     /// The error type for this element's operations.
     type Error;
 
+    const TYPE: ElementType;
+
     /// Returns the metadata expected at the input.
     /// Returns `None` if this is a source element.
     fn get_in_info(&self) -> Option<Self::Info>;
@@ -58,6 +60,14 @@ pub trait Element {
         C: Consumer,
         P: Producer,
         T: Transformer;
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum ElementType {
+    Source,
+    Sink,
+    Processor,
+    InPlaceTransformer,
 }
 
 /// Represents the status of a `process` call.
