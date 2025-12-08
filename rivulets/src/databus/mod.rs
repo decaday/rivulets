@@ -57,6 +57,8 @@ pub mod register {
     #[cfg(feature = "alloc")]
     use alloc::vec::Vec;
     #[cfg(feature = "alloc")]
+    use alloc::boxed::Box;
+    #[cfg(feature = "alloc")]
     use crate::Mutex;
 
     #[cfg(not(feature = "alloc"))]
@@ -91,7 +93,7 @@ pub mod register {
         #[cfg(not(feature = "alloc"))]
         consumers: [UnsafeCell<(AtomicWaker, CS)>; MAX_CONSUMERS],
         #[cfg(feature = "alloc")]
-        consumers: Mutex<Vec<(AtomicWaker, CS)>>,
+        consumers: Mutex<Vec<Box<(AtomicWaker, CS)>>>,
 
         registered: AtomicU8,
         consumers_finished: AtomicU8,
@@ -169,7 +171,7 @@ pub mod register {
             #[cfg(feature = "alloc")]
             {
                 let mut wakers = self.consumers.lock().unwrap();
-                wakers.push((AtomicWaker::new(), initial_state));
+                wakers.push(Box::new((AtomicWaker::new(), initial_state)));
             }
             id
         }
@@ -261,8 +263,8 @@ pub mod register {
             #[cfg(feature = "alloc")]
             {
                 let wakers = self.consumers.lock().unwrap();
-                for (waker, _) in wakers.iter() {
-                    waker.wake();
+                for waker in wakers.iter() {
+                    waker.0.wake();
                 }
             }
         }
@@ -320,7 +322,8 @@ pub mod register {
         ///
         /// # Safety
         /// See safety comment in `producer_state`. On `alloc` builds, the returned
-        /// reference is valid because the consumer Vec is not modified after registration.
+        /// reference is valid because the consumer states are boxed and their addresses
+        /// remain stable even if the vector reallocates.
         pub unsafe fn consumer_state(&self, id: u8) -> &CS {
             #[cfg(not(feature = "alloc"))]
             {
@@ -328,8 +331,10 @@ pub mod register {
             }
             #[cfg(feature = "alloc")]
             {
-                let ptr = self.consumers.lock().unwrap().as_ptr();
-                &(*ptr.add(id as usize)).1
+                let guard = self.consumers.lock().unwrap();
+                let item = &guard[id as usize];
+                let ptr = &**item as *const (AtomicWaker, CS);
+                &(*ptr).1
             }
         }
         
@@ -344,8 +349,10 @@ pub mod register {
             }
             #[cfg(feature = "alloc")]
             {
-                let ptr = self.consumers.lock().unwrap().as_mut_ptr();
-                &mut (*ptr.add(id as usize)).1
+                let guard = self.consumers.lock().unwrap();
+                let item = &guard[id as usize];
+                let ptr = &**item as *const (AtomicWaker, CS) as *mut (AtomicWaker, CS);
+                &mut (*ptr).1
             }
         }
 
