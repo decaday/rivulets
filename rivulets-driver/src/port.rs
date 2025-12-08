@@ -1,3 +1,5 @@
+use core::ops::Deref;
+
 use crate::databus::{Consumer, Producer, Transformer};
 use crate::payload::{Metadata, ReadPayload, TransformPayload, WritePayload};
 
@@ -115,6 +117,12 @@ pub struct PayloadSize {
     pub preferred: u16,
 }
 
+impl PayloadSize {
+    pub fn new(min: u16, preferred: u16) -> Self {
+        Self { min, preferred }
+    }
+}
+
 impl PortRequirements {
     pub fn new() -> Self {
         Self {
@@ -159,6 +167,7 @@ impl PortRequirements {
 
 /// A dummy struct used as a placeholder for unused generic type parameters
 /// in `InPort` and `OutPort`.
+#[derive(Debug, Clone, Copy)]
 pub struct Dmy;
 
 // --- Dummy Trait Implementations for Dmy ---
@@ -176,7 +185,7 @@ impl<'a> crate::databus::Databus for Dmy {
 }
 
 impl Consumer for Dmy {
-    async fn acquire_read<'a>(&'a self) -> ReadPayload<'a, Self> {
+    async fn acquire_read<'a>(&'a self, _len: usize) -> ReadPayload<'a, Self> {
         unimplemented!()
     }
     fn release_read(&self, _consumed_bytes: usize) {
@@ -185,7 +194,7 @@ impl Consumer for Dmy {
 }
 
 impl Producer for Dmy {
-    async fn acquire_write<'a>(&'a self) -> WritePayload<'a, Self> {
+    async fn acquire_write<'a>(&'a self, _len: usize, _exact: bool) -> WritePayload<'a, Self> {
         unimplemented!()
     }
     fn release_write(&self, _metadata: Metadata) {
@@ -194,10 +203,17 @@ impl Producer for Dmy {
 }
 
 impl Transformer for Dmy {
-    async fn acquire_transform<'a>(&'a self) -> TransformPayload<'a, Self> {
+    async fn acquire_transform<'a>(&'a self, _len: usize) -> TransformPayload<'a, Self> {
         unimplemented!()
     }
     fn release_transform(&self, _metadata: Metadata, _remaining_length: usize) {
         unimplemented!()
+    }
+}
+
+impl Deref for Dmy {
+    type Target = Self;
+    fn deref(&self) -> &Self::Target {
+        &self
     }
 }

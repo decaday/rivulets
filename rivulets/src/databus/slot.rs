@@ -60,6 +60,7 @@ impl TryFrom<u8> for State {
 pub struct Slot<S: Storage<Item = u8>> {
     storage: S,
     payload_metadata: UnsafeCell<Option<Metadata>>,
+    // vaild_length: AtomicUsize,
     state: AtomicU8,
     registry: ParticipantRegistry<(), (), ()>,
 }
@@ -123,8 +124,12 @@ where
     S: Storage<Item = u8>,
     P: Deref<Target=Slot<S>> + Clone,
 {
-    async fn acquire_write<'a>(&'a self) -> WritePayload<'a, Self> {
+    async fn acquire_write<'a>(&'a self, len: usize, exact: bool) -> WritePayload<'a, Self> {
         self.inner.registry.acquire_write_check();
+        if exact {
+            assert!(len < self.inner.storage.len());
+        }
+        let payload_len = self.inner.storage.len().min(len);
 
         poll_fn(|cx| {
             if self.inner.state.compare_exchange(
@@ -132,7 +137,7 @@ where
             ).is_ok() {
                 let buffer = unsafe { self.inner.storage.slice_mut(0..self.inner.storage.len()) };
                 let buffer_ready_for_write = unsafe { &mut *(buffer as *mut [MaybeUninit<u8>] as *mut [u8]) };
-                Poll::Ready(WritePayload::new(buffer_ready_for_write, self))
+                Poll::Ready(WritePayload::new(&mut buffer_ready_for_write[0..payload_len], self))
             } else {
                 self.inner.registry.register_producer_waker(cx.waker());
                 Poll::Pending
@@ -162,9 +167,11 @@ where
     S: Storage<Item = u8>,
     P: Deref<Target=Slot<S>> + Clone,
 {
-    async fn acquire_transform<'a>(&'a self) -> TransformPayload<'a, Self> {
+    async fn acquire_transform<'a>(&'a self, len: usize) -> TransformPayload<'a, Self> {
         self.inner.registry.acquire_transform_check();
-
+        let payload_len = unsafe { (*self.inner.payload_metadata.get()).unwrap().valid_length };
+        assert!(payload_len <= len);
+        
         poll_fn(|cx| {
             if self.inner.state.compare_exchange(
                 State::Full as u8, State::Transforming as u8, Ordering::Acquire, Ordering::Relaxed
@@ -173,7 +180,7 @@ where
                     let buffer_mut = self.inner.storage.slice_mut(0..self.inner.storage.len());
                     let buffer_ready = &mut *(buffer_mut as *mut [MaybeUninit<u8>] as *mut [u8]);
                     let metadata_ref = (*self.inner.payload_metadata.get()).unwrap();
-                    (buffer_ready, metadata_ref)
+                    (&mut buffer_ready[0..payload_len], metadata_ref)
                 };
                 Poll::Ready(TransformPayload::new(buffer, metadata, self))
             } else {
@@ -203,8 +210,11 @@ where
     S: Storage<Item = u8>,
     P: Deref<Target=Slot<S>> + Clone,
 {
-    async fn acquire_read<'a>(&'a self) -> ReadPayload<'a, Self> {
+    async fn acquire_read<'a>(&'a self, len: usize) -> ReadPayload<'a, Self> {
         self.inner.registry.acquire_read_check();
+
+            let payload_len = unsafe { (*self.inner.payload_metadata.get()).unwrap().valid_length };
+        assert!(payload_len <= len);
 
         poll_fn(|cx| {
             if self.inner.registry.is_consumer_finished(self.id) {
@@ -217,7 +227,7 @@ where
                     let buffer_slice = self.inner.storage.slice_mut(0..self.inner.storage.len());
                     let buffer_ref = &*(buffer_slice as *const [MaybeUninit<u8>] as *const [u8]);
                     let metadata_ref = (*self.inner.payload_metadata.get()).unwrap();
-                    (buffer_ref, metadata_ref)
+                    (&buffer_ref[0..payload_len], metadata_ref)
                 };
                 Poll::Ready(ReadPayload::new(buffer, metadata, self))
             } else {
@@ -265,13 +275,13 @@ mod tests {
         let consumer = ConsumerHandle::new(static_slot, PayloadSize { preferred: 4, min: 4 });
 
         let consumer_handle = tokio::spawn(async move {
-            let payload = consumer.acquire_read().await;
+            let payload = consumer.acquire_read(8).await;
             assert_eq!(payload.len(), 4);
             assert_eq!(&payload[..], &[1, 2, 3, 4]);
             consumer.release_read(0);
         });
 
-        let mut write_payload = producer.acquire_write().await;
+        let mut write_payload = producer.acquire_write(8, false).await;
         assert_eq!(get_current_state(static_slot), State::Writing);
         write_payload[0..4].copy_from_slice(&[1, 2, 3, 4]);
         write_payload.set_valid_length(4);
@@ -298,14 +308,14 @@ mod tests {
 
         let consumer_handle = tokio::spawn(async move {
             rx.await.expect("Failed to receive signal");
-            let payload = consumer.acquire_read().await;
+            let payload = consumer.acquire_read(8).await;
             assert_eq!(payload.len(), 4);
             assert_eq!(&payload[..], &[11, 12, 13, 14]);
             consumer.release_read(0);
         });
         
         let transformer_handle = tokio::spawn(async move {
-            let mut payload = transformer.acquire_transform().await;
+            let mut payload = transformer.acquire_transform(8).await;
             assert_eq!(&payload[..], &[1, 2, 3, 4]);
             for byte in payload.iter_mut() {
                 *byte += 10;
@@ -313,7 +323,7 @@ mod tests {
             transformer.release_transform(payload.metadata, 0);
         });
 
-        let mut write_payload = producer.acquire_write().await;
+        let mut write_payload = producer.acquire_write(8, false).await;
         write_payload[0..4].copy_from_slice(&[1, 2, 3, 4]);
         write_payload.set_valid_length(4);
         
@@ -341,12 +351,12 @@ mod tests {
         let consumer = ConsumerHandle::new(slot.clone(), PayloadSize { preferred: 4, min: 4 });
 
         let consumer_handle = tokio::spawn(async move {
-            consumer.acquire_read().await;
+            consumer.acquire_read(4).await;
         });
 
         tokio::task::yield_now().await;
 
-        let mut write_payload = producer.acquire_write().await;
+        let mut write_payload = producer.acquire_write(4, false).await;
         write_payload.set_valid_length(4);
         drop(write_payload);
         
@@ -367,7 +377,7 @@ mod tests {
         
         let producer_handle = tokio::spawn({
             async move {
-                let mut write_payload = producer.acquire_write().await;
+                let mut write_payload = producer.acquire_write(4, false).await;
                 write_payload[0..4].copy_from_slice(&[10, 20, 30, 40]);
                 write_payload.set_valid_length(4);
             }
@@ -379,14 +389,14 @@ mod tests {
         let (c1_tx, c1_rx) = oneshot::channel();
 
         let consumer1_handle = tokio::spawn(async move {
-            let payload = consumer1.acquire_read().await;
+            let payload = consumer1.acquire_read(4).await;
             assert_eq!(&payload[..], &[10, 20, 30, 40]);
             consumer1.release_read(0);
         });
 
         let consumer2_handle = tokio::spawn(async move {
             c1_rx.await.unwrap();
-            let payload = consumer2.acquire_read().await;
+            let payload = consumer2.acquire_read(4).await;
             assert_eq!(&payload[..], &[10, 20, 30, 40]);
             consumer2.release_read(0);
         });

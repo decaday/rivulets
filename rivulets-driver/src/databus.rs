@@ -1,3 +1,5 @@
+use core::ops::Deref;
+
 use crate::payload::{Metadata, ReadPayload, TransformPayload, WritePayload};
 use crate::port::{InPlacePort, InPort, OutPort, PayloadSize};
 
@@ -25,7 +27,7 @@ pub trait Consumer: Sized {
     /// Asynchronously acquires a payload for reading data.
     ///
     /// This function will wait until data is available in the databus.
-    async fn acquire_read<'a>(&'a self) -> ReadPayload<'a, Self>;
+    async fn acquire_read<'a>(&'a self, len: usize) -> ReadPayload<'a, Self>;
 
     /// Called by `ReadPayload` when it is dropped to release the buffer.
     ///
@@ -49,7 +51,7 @@ pub trait Producer: Sized {
     /// Asynchronously acquires a payload for writing data.
     ///
     /// This function will wait until space is available in the databus.
-    async fn acquire_write<'a>(&'a self) -> WritePayload<'a, Self>;
+    async fn acquire_write<'a>(&'a self, len: usize, exact: bool) -> WritePayload<'a, Self>;
 
     /// Called by `WritePayload` when it is dropped to commit the written data.
     ///
@@ -70,7 +72,7 @@ pub trait Transformer: Sized {
     ///
     /// This operation will wait until the databus contains data that is ready
     /// to be processed.
-    async fn acquire_transform<'a>(&'a self) -> TransformPayload<'a, Self>;
+    async fn acquire_transform<'a>(&'a self, len: usize) -> TransformPayload<'a, Self>;
 
     /// Called by `TransformPayload` when it is dropped to finalize the transformation.
     ///
