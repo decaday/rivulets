@@ -173,6 +173,8 @@ pub struct Dmy;
 // --- Dummy Trait Implementations for Dmy ---
 
 impl<'a> crate::databus::Databus for Dmy {
+    type Item = u8;
+
     fn do_register_producer(&self, _payload_size: PayloadSize) {
         unimplemented!()
     }
@@ -185,6 +187,8 @@ impl<'a> crate::databus::Databus for Dmy {
 }
 
 impl Consumer for Dmy {
+    type Item = u8;
+
     async fn acquire_read<'a>(&'a self, _len: usize) -> ReadPayload<'a, Self> {
         unimplemented!()
     }
@@ -194,6 +198,8 @@ impl Consumer for Dmy {
 }
 
 impl Producer for Dmy {
+    type Item = u8;
+
     async fn acquire_write<'a>(&'a self, _len: usize, _exact: bool) -> WritePayload<'a, Self> {
         unimplemented!()
     }
@@ -203,6 +209,8 @@ impl Producer for Dmy {
 }
 
 impl Transformer for Dmy {
+    type Item = u8;
+
     async fn acquire_transform<'a>(&'a self, _len: usize) -> TransformPayload<'a, Self> {
         unimplemented!()
     }

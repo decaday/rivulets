@@ -16,6 +16,7 @@ impl Operation {
 }
 
 pub trait Databus {
+    type Item: Sized;
     fn do_register_producer(&self, payload_size: PayloadSize);
     fn do_register_consumer(&self, payload_size: PayloadSize) -> u8;
     fn do_register_transformer(&self, payload_size: PayloadSize);
@@ -24,6 +25,8 @@ pub trait Databus {
 /// A trait for components from which audio data can be read asynchronously.
 #[allow(async_fn_in_trait)]
 pub trait Consumer: Sized {
+    type Item: Sized;
+
     /// Asynchronously acquires a payload for reading data.
     ///
     /// This function will wait until data is available in the databus.
@@ -48,6 +51,8 @@ pub trait Consumer: Sized {
 /// A trait for components to which audio data can be written asynchronously.
 #[allow(async_fn_in_trait)]
 pub trait Producer: Sized {
+    type Item: Sized;
+
     /// Asynchronously acquires a payload for writing data.
     ///
     /// This function will wait until space is available in the databus.
@@ -68,6 +73,8 @@ pub trait Producer: Sized {
 /// A trait for components that support in-place modification of a buffer.
 #[allow(async_fn_in_trait)]
 pub trait Transformer: Sized {
+    type Item: Sized;
+
     /// Asynchronously acquires a payload for in-place transformation.
     ///
     /// This operation will wait until the databus contains data that is ready

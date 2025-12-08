@@ -22,9 +22,9 @@ extern crate alloc;
 
 use super::{ConsumerHandle, ProducerHandle, TransformerHandle, ParticipantRegistry};
 
-pub type StaticSlot<const N: usize> = Slot<Array<u8, N>>;
+pub type StaticSlot<T, const N: usize> = Slot<Array<T, N>>;
 #[cfg(feature = "alloc")]
-pub type HeapSlot = Slot<Heap<u8>>;
+pub type HeapSlot<T> = Slot<Heap<T>>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -57,7 +57,7 @@ impl TryFrom<u8> for State {
     }
 }
 
-pub struct Slot<S: Storage<Item = u8>> {
+pub struct Slot<S: Storage> {
     storage: S,
     payload_metadata: UnsafeCell<Option<Metadata>>,
     // vaild_length: AtomicUsize,
@@ -65,9 +65,9 @@ pub struct Slot<S: Storage<Item = u8>> {
     registry: ParticipantRegistry<(), (), ()>,
 }
 
-unsafe impl<S: Storage<Item = u8> + Sync> Sync for Slot<S> {}
+unsafe impl<S: Storage + Sync> Sync for Slot<S> {}
 
-impl<S: Storage<Item = u8>> Slot<S> {
+impl<S: Storage> Slot<S> {
     pub fn new(storage: S) -> Self {
         Slot {
             storage,
@@ -82,7 +82,9 @@ impl<S: Storage<Item = u8>> Slot<S> {
     }
 }
 
-impl<S: Storage<Item=u8>> Databus for Slot<S> {
+impl<S: Storage> Databus for Slot<S> {
+    type Item = S::Item;
+
     fn do_register_producer(&self, payload_size: PayloadSize) {
         self.registry.register_producer(());
         if payload_size.preferred as usize > self.storage.len() {
@@ -107,23 +109,25 @@ impl<S: Storage<Item=u8>> Databus for Slot<S> {
 }
 
 #[cfg(feature = "alloc")]
-impl Slot<Heap<u8>> {
+impl<T> Slot<Heap<T>> {
     pub fn new_heap(capacity: usize) -> Self {
         Self::new(Heap::new(capacity))
     }
 }
 
-impl<const N: usize> Slot<Array<u8, N>> {
+impl<T, const N: usize> Slot<Array<T, N>> {
     pub fn new_static() -> Self {
-        Self::new(Array::from([MaybeUninit::uninit(); N]))
+        Self::new(Array::from(core::array::from_fn(|_| MaybeUninit::uninit())))
     }
 }
 
 impl<S, P> Producer for ProducerHandle<Slot<S>, P> 
 where 
-    S: Storage<Item = u8>,
+    S: Storage,
     P: Deref<Target=Slot<S>> + Clone,
 {
+    type Item = S::Item;
+
     async fn acquire_write<'a>(&'a self, len: usize, exact: bool) -> WritePayload<'a, Self> {
         self.inner.registry.acquire_write_check();
         if exact {
@@ -136,7 +140,10 @@ where
                 State::Empty as u8, State::Writing as u8, Ordering::Acquire, Ordering::Relaxed
             ).is_ok() {
                 let buffer = unsafe { self.inner.storage.slice_mut(0..self.inner.storage.len()) };
-                let buffer_ready_for_write = unsafe { &mut *(buffer as *mut [MaybeUninit<u8>] as *mut [u8]) };
+                // Casting MaybeUninit<T> slice to T slice for writing.
+                // Note: This pattern requires care if T is not plain old data, as we are creating
+                // &mut [T] to uninitialized memory.
+                let buffer_ready_for_write = unsafe { &mut *(buffer as *mut [MaybeUninit<S::Item>] as *mut [S::Item]) };
                 Poll::Ready(WritePayload::new(&mut buffer_ready_for_write[0..payload_len], self))
             } else {
                 self.inner.registry.register_producer_waker(cx.waker());
@@ -164,21 +171,24 @@ where
 
 impl<S, P> Transformer for TransformerHandle<Slot<S>, P> 
 where 
-    S: Storage<Item = u8>,
+    S: Storage,
     P: Deref<Target=Slot<S>> + Clone,
 {
+    type Item = S::Item;
+
     async fn acquire_transform<'a>(&'a self, len: usize) -> TransformPayload<'a, Self> {
         self.inner.registry.acquire_transform_check();
-        let payload_len = unsafe { (*self.inner.payload_metadata.get()).unwrap().valid_length };
-        assert!(payload_len <= len);
         
         poll_fn(|cx| {
             if self.inner.state.compare_exchange(
                 State::Full as u8, State::Transforming as u8, Ordering::Acquire, Ordering::Relaxed
             ).is_ok() {
+                let payload_len = unsafe { (*self.inner.payload_metadata.get()).unwrap().valid_length };
+                assert!(payload_len <= len);
+
                 let (buffer, metadata) = unsafe {
                     let buffer_mut = self.inner.storage.slice_mut(0..self.inner.storage.len());
-                    let buffer_ready = &mut *(buffer_mut as *mut [MaybeUninit<u8>] as *mut [u8]);
+                    let buffer_ready = &mut *(buffer_mut as *mut [MaybeUninit<S::Item>] as *mut [S::Item]);
                     let metadata_ref = (*self.inner.payload_metadata.get()).unwrap();
                     (&mut buffer_ready[0..payload_len], metadata_ref)
                 };
@@ -207,14 +217,13 @@ where
 
 impl<S, P> Consumer for ConsumerHandle<Slot<S>, P> 
 where 
-    S: Storage<Item = u8>,
+    S: Storage,
     P: Deref<Target=Slot<S>> + Clone,
 {
-    async fn acquire_read<'a>(&'a self, len: usize) -> ReadPayload<'a, Self> {
-        self.inner.registry.acquire_read_check();
+    type Item = S::Item;
 
-            let payload_len = unsafe { (*self.inner.payload_metadata.get()).unwrap().valid_length };
-        assert!(payload_len <= len);
+    async fn acquire_read<'a>(&'a self, len: usize) -> ReadPayload<'a, Self> {
+        self.inner.registry.acquire_read_check();        
 
         poll_fn(|cx| {
             if self.inner.registry.is_consumer_finished(self.id) {
@@ -223,9 +232,12 @@ where
             }
 
             if self.inner.state.load(Ordering::Acquire) == State::ReadyForRead as u8 {
+                let payload_len = unsafe { (*self.inner.payload_metadata.get()).unwrap().valid_length };
+                assert!(payload_len <= len);
+
                 let (buffer, metadata) = unsafe {
                     let buffer_slice = self.inner.storage.slice_mut(0..self.inner.storage.len());
-                    let buffer_ref = &*(buffer_slice as *const [MaybeUninit<u8>] as *const [u8]);
+                    let buffer_ref = &*(buffer_slice as *const [MaybeUninit<S::Item>] as *const [S::Item]);
                     let metadata_ref = (*self.inner.payload_metadata.get()).unwrap();
                     (&buffer_ref[0..payload_len], metadata_ref)
                 };
@@ -268,7 +280,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_producer_consumer_flow_no_transformer() {
-        let slot: StaticSlot<8> = StaticSlot::new_static();
+        // Specify u8 explicitly now
+        let slot: StaticSlot<u8, 8> = StaticSlot::new_static();
         let static_slot: &'static Slot<_> = Box::leak(Box::new(slot));
         
         let producer = ProducerHandle::new(static_slot, PayloadSize { preferred: 4, min: 4 });
@@ -297,7 +310,8 @@ mod tests {
     #[tokio::test]
     #[cfg(feature="alloc")]
     async fn test_full_pipeline_flow_with_transformer_heap() {
-        let slot = HeapSlot::new_heap(8);
+        // Specify u8 explicitly now
+        let slot = HeapSlot::<u8>::new_heap(8);
         let slot = Arc::new(slot);
 
         let producer = ProducerHandle::new(slot.clone(), PayloadSize { preferred: 4, min: 4 });
@@ -343,7 +357,7 @@ mod tests {
     
     #[tokio::test]
     async fn test_consumer_waits_for_transformer_when_configured() {
-        let slot: StaticSlot<8> = StaticSlot::new_static();
+        let slot: StaticSlot<u8, 8> = StaticSlot::new_static();
         let slot = Arc::new(slot);
 
         let producer = ProducerHandle::new(slot.clone(), PayloadSize { preferred: 4, min: 4 });
@@ -368,7 +382,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_two_consumers_flow() {
-        let slot: StaticSlot<8> = StaticSlot::new_static();
+        let slot: StaticSlot<u8, 8> = StaticSlot::new_static();
         let slot = Arc::new(slot);
 
         let producer = ProducerHandle::new(slot.clone(), PayloadSize { preferred: 4, min: 4 });

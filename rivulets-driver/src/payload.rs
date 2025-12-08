@@ -3,7 +3,7 @@ use core::ops::{Deref, DerefMut};
 macro_rules! impl_deref_valid_length {
     ($struct_name:ident, <'a, $g:ident: $trait:path>) => {
         impl<'a, $g: $trait> Deref for $struct_name<'a, $g> {
-            type Target = [u8];
+            type Target = [$g::Item];
             /// Dereferences to a slice containing only the valid data.
             fn deref(&self) -> &Self::Target {
                 &self.data[..self.metadata.valid_length]
@@ -15,7 +15,7 @@ macro_rules! impl_deref_valid_length {
 macro_rules! impl_deref_full_data {
     ($struct_name:ident, <'a, $g:ident: $trait:path>) => {
         impl<'a, $g: $trait> Deref for $struct_name<'a, $g> {
-            type Target = [u8];
+            type Target = [$g::Item];
             fn deref(&self) -> &Self::Target {
                 self.data
             }
@@ -40,7 +40,7 @@ use crate::databus::{Consumer, Producer, Transformer};
 pub struct Metadata {
     /// Position of this payload in a sequence.
     pub position: Position,
-    /// Length of valid data in the payload buffer, in bytes.
+    /// Length of valid data in the payload buffer, in items (elements).
     pub valid_length: usize,
 }
 
@@ -75,14 +75,14 @@ pub enum Position {
 /// When this guard is dropped, the buffer is automatically released back to the `Consumer`.
 /// This payload provides immutable access to the data.
 pub struct ReadPayload<'a, C: Consumer> {
-    pub data: &'a [u8],
+    pub data: &'a [C::Item],
     pub metadata: Metadata,
     remaining_length: usize,
     consumer: &'a C,
 }
 
 impl<'a, C: Consumer> ReadPayload<'a, C> {
-    pub fn new(data: &'a [u8], metadata: Metadata, consumer: &'a C) -> Self {
+    pub fn new(data: &'a [C::Item], metadata: Metadata, consumer: &'a C) -> Self {
         Self { data, metadata, remaining_length: 0, consumer }
     }
 
@@ -110,13 +110,13 @@ impl<'a, C: Consumer> Drop for ReadPayload<'a, C> {
 /// When this guard is dropped, the written data and its metadata are "committed"
 /// back to the `Producer`.
 pub struct WritePayload<'a, P: Producer> {
-    data: &'a mut [u8],
+    data: &'a mut [P::Item],
     pub metadata: Metadata,
     producer: &'a P,
 }
 
 impl<'a, P: Producer> WritePayload<'a, P> {
-    pub fn new(data: &'a mut [u8], producer: &'a P) -> Self {
+    pub fn new(data: &'a mut [P::Item], producer: &'a P) -> Self {
         Self {
             data,
             metadata: Metadata::default(),
@@ -151,14 +151,14 @@ impl<'a, P: Producer> Drop for WritePayload<'a, P> {
 /// Acquired from a `Transformer`. When this guard is dropped, the transformation is
 /// considered complete, making the buffer available for the next consumer or transformer.
 pub struct TransformPayload<'a, T: Transformer> {
-    data: &'a mut [u8],
+    data: &'a mut [T::Item],
     pub metadata: Metadata,
     remaining_length: usize,
     transformer: &'a T,
 }
 
 impl<'a, T: Transformer> TransformPayload<'a, T> {
-    pub fn new(data: &'a mut [u8], metadata: Metadata, transformer: &'a T) -> Self {
+    pub fn new(data: &'a mut [T::Item], metadata: Metadata, transformer: &'a T) -> Self {
         Self { data, metadata, remaining_length: 0, transformer }
     }
 
