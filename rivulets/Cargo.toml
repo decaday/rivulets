@@ -30,12 +30,15 @@ libm = "0.2.15"
 portable-atomic = { version = "1.11.1", features = ["require-cas"] }
 bitfield-struct = "0.11.0"
 
+fundsp = { version = "0.20", default-features = false, optional = true }
+
 [dev-dependencies]
 embedded-io-adapters = { version = "0.6" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "full"] }
 critical-section = { version = "1.2.0" }
 
 [features]
+default = ["std", "fundsp"]
 defmt = ["dep:defmt", "embassy-sync/defmt"]
 log = ["dep:log", "embassy-sync/log"]
 
@@ -48,7 +51,7 @@ std = [
     "embassy-sync/std",
     "ringbuf/std",
     "async-ringbuf/std",
-    "log",
+    "fundsp?/std",
 
     # dev-deps
     "embedded-io-adapters/std",
@@ -56,3 +59,5 @@ std = [
 ]
 
 alloc = ["ringbuf/alloc", "async-ringbuf/alloc"]
+
+fundsp = ["dep:fundsp"]
