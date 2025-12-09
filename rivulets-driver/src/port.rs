@@ -1,3 +1,4 @@
+use core::marker::PhantomData;
 use core::ops::Deref;
 
 use crate::databus::{Consumer, Producer, Transformer};
@@ -13,13 +14,13 @@ pub enum InPort<C: Consumer> {
     None,
 }
 
-impl InPort<Dmy> {
+impl<T> InPort<Dmy<T>> {
     pub fn new_none() -> Self {
         InPort::None
     }
 }
 
-impl Default for InPort<Dmy> {
+impl<T> Default for InPort<Dmy<T>> {
     fn default() -> Self {
         InPort::None
     }
@@ -51,13 +52,13 @@ pub enum OutPort<P: Producer> {
     None,
 }
 
-impl OutPort<Dmy> {
+impl<T> OutPort<Dmy<T>> {
     pub fn new_none() -> Self {
         OutPort::None
     }
 }
 
-impl Default for OutPort<Dmy> {
+impl<T> Default for OutPort<Dmy<T>> {
     fn default() -> Self {
         OutPort::None
     }
@@ -90,13 +91,13 @@ pub enum InPlacePort<T: Transformer> {
     None,
 }
 
-impl InPlacePort<Dmy> {
+impl<T> InPlacePort<Dmy<T>> {
     pub fn new_none() -> Self {
         InPlacePort::None
     }
 }
 
-impl Default for InPlacePort<Dmy> {
+impl<T> Default for InPlacePort<Dmy<T>> {
     fn default() -> Self {
         InPlacePort::None
     }
@@ -111,12 +112,9 @@ pub struct PortRequirements {
     pub in_place: Option<PayloadSize>,
 }
 
-/// Defines the size requirements for a payload in terms of **item count** (not bytes).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PayloadSize {
-    /// Minimum number of items required.
     pub min: u16,
-    /// Preferred number of items.
     pub preferred: u16,
 }
 
@@ -171,12 +169,24 @@ impl PortRequirements {
 /// A dummy struct used as a placeholder for unused generic type parameters
 /// in `InPort` and `OutPort`.
 #[derive(Debug, Clone, Copy)]
-pub struct Dmy;
+pub struct Dmy<T = u8>(PhantomData<T>);
+
+impl<T> Dmy<T> {
+    pub fn new() -> Self {
+        Self(PhantomData)
+    }
+}
+
+impl<T> Default for Dmy<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 // --- Dummy Trait Implementations for Dmy ---
 
-impl<'a> crate::databus::Databus for Dmy {
-    type Item = u8;
+impl<'a, T> crate::databus::Databus for Dmy<T> {
+    type Item = T;
 
     fn do_register_producer(&self, _payload_size: PayloadSize) {
         unimplemented!()
@@ -189,8 +199,8 @@ impl<'a> crate::databus::Databus for Dmy {
     }
 }
 
-impl Consumer for Dmy {
-    type Item = u8;
+impl<T> Consumer for Dmy<T> {
+    type Item = T;
 
     async fn acquire_read<'a>(&'a self, _len: usize) -> ReadPayload<'a, Self> {
         unimplemented!()
@@ -200,8 +210,8 @@ impl Consumer for Dmy {
     }
 }
 
-impl Producer for Dmy {
-    type Item = u8;
+impl<T> Producer for Dmy<T> {
+    type Item = T;
 
     async fn acquire_write<'a>(&'a self, _len: usize, _exact: bool) -> WritePayload<'a, Self> {
         unimplemented!()
@@ -211,8 +221,8 @@ impl Producer for Dmy {
     }
 }
 
-impl Transformer for Dmy {
-    type Item = u8;
+impl<T> Transformer for Dmy<T> {
+    type Item = T;
 
     async fn acquire_transform<'a>(&'a self, _len: usize) -> TransformPayload<'a, Self> {
         unimplemented!()
@@ -222,7 +232,7 @@ impl Transformer for Dmy {
     }
 }
 
-impl Deref for Dmy {
+impl<T> Deref for Dmy<T> {
     type Target = Self;
     fn deref(&self) -> &Self::Target {
         &self

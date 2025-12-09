@@ -11,6 +11,13 @@ use crate::port::{InPlacePort, InPort, OutPort, PortRequirements};
 pub trait Element {
     /// The type of metadata associated with the data stream.
     type Format: Format;
+
+    /// The type of data items received at the input.
+    type InputItem: Sized + 'static;
+
+    /// The type of data items produced at the output.
+    type OutputItem: Sized + 'static;
+
     /// The error type for this element's operations.
     type Error;
 
@@ -57,9 +64,9 @@ pub trait Element {
         in_place_port: &mut InPlacePort<T>,
     ) -> ProcessResult<Self::Error>
     where
-        C: Consumer,
-        P: Producer,
-        T: Transformer;
+        C: Consumer<Item = Self::InputItem>,
+        P: Producer<Item = Self::OutputItem>,
+        T: Transformer<Item = Self::OutputItem>;
 }
 
 #[derive(Debug, Clone, Copy)]

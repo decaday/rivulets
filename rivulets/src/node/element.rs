@@ -13,9 +13,9 @@ where
     E: Element<Format=F>,
     DI: DatabusRef,
     DO: DatabusRef,
-    ConsumerHandle<DI::Databus, DI>: Consumer,
-    ProducerHandle<DO::Databus, DO>: Producer,
-    TransformerHandle<DO::Databus, DO>: Transformer,
+    ConsumerHandle<DI::Databus, DI>: Consumer<Item = E::InputItem>,
+    ProducerHandle<DO::Databus, DO>: Producer<Item = E::OutputItem>,
+    TransformerHandle<DO::Databus, DO>: Transformer<Item = E::OutputItem>,
     F: Format,
 {
     element: E,
@@ -32,9 +32,9 @@ where
     E: Element<Format=F>,
     DI: DatabusRef,
     DO: DatabusRef,
-    ConsumerHandle<DI::Databus, DI>: Consumer,
-    ProducerHandle<DO::Databus, DO>: Producer,
-    TransformerHandle<DO::Databus, DO>: Transformer,
+    ConsumerHandle<DI::Databus, DI>: Consumer<Item = E::InputItem>,
+    ProducerHandle<DO::Databus, DO>: Producer<Item = E::OutputItem>,
+    TransformerHandle<DO::Databus, DO>: Transformer<Item = E::OutputItem>,
     F: Format,
 {
     pub fn new(element: E, databus_in: DI, databus_out: DO) -> Self {
@@ -55,9 +55,9 @@ where
     E: Element<Format=F>,
     DI: DatabusRef,
     DO: DatabusRef,
-    ConsumerHandle<DI::Databus, DI>: Consumer,
-    ProducerHandle<DO::Databus, DO>: Producer,
-    TransformerHandle<DO::Databus, DO>: Transformer,
+    ConsumerHandle<DI::Databus, DI>: Consumer<Item = E::InputItem>,
+    ProducerHandle<DO::Databus, DO>: Producer<Item = E::OutputItem>,
+    TransformerHandle<DO::Databus, DO>: Transformer<Item = E::OutputItem>,
     F: Format,
 {
     type Error = E::Error;
