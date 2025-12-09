@@ -111,9 +111,12 @@ pub struct PortRequirements {
     pub in_place: Option<PayloadSize>,
 }
 
+/// Defines the size requirements for a payload in terms of **item count** (not bytes).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PayloadSize {
+    /// Minimum number of items required.
     pub min: u16,
+    /// Preferred number of items.
     pub preferred: u16,
 }
 

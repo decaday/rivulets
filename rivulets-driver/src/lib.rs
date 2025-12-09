@@ -3,7 +3,7 @@
 pub mod stream;
 pub mod element;
 pub mod port;
-pub mod info;
+pub mod format;
 pub mod databus;
 pub mod payload;
 pub mod node;

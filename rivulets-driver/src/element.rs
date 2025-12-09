@@ -1,5 +1,5 @@
 use crate::databus::{Consumer, Producer, Transformer};
-use crate::info::Info;
+use crate::format::Format;
 use crate::port::{InPlacePort, InPort, OutPort, PortRequirements};
 
 /// The core trait for any data processing unit in the pipeline.
@@ -10,7 +10,7 @@ use crate::port::{InPlacePort, InPort, OutPort, PortRequirements};
 #[allow(async_fn_in_trait)]
 pub trait Element {
     /// The type of metadata associated with the data stream.
-    type Info: Info;
+    type Format: Format;
     /// The error type for this element's operations.
     type Error;
 
@@ -18,11 +18,11 @@ pub trait Element {
 
     /// Returns the metadata expected at the input.
     /// Returns `None` if this is a source element.
-    fn get_in_info(&self) -> Option<Self::Info>;
+    fn get_in_format(&self) -> Option<Self::Format>;
 
     /// Returns the metadata produced at the output.
     /// Returns `None` if this is a sink element.
-    fn get_out_info(&self) -> Option<Self::Info>;
+    fn get_out_format(&self) -> Option<Self::Format>;
 
     fn get_port_requirements(&self) -> PortRequirements;
 
@@ -41,7 +41,7 @@ pub trait Element {
         Ok(())
     }
 
-    /// Resets the internal state and info of the element.
+    /// Resets the internal state and format of the element.
     async fn reset(&mut self) -> Result<(), Self::Error> {
         self.flush().await
     }

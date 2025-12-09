@@ -4,7 +4,7 @@ pub trait Node {
 
     /// Initializes the node and its underlying element.
     ///
-    /// This is where `Info` negotiation happens. The pipeline builder calls this
+    /// This is where `Format` negotiation happens. The pipeline builder calls this
     /// for each node sequentially to ensure compatibility before running the pipeline.
     async fn init(&mut self) -> Result<(), Self::Error>;
 

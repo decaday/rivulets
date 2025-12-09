@@ -1,5 +1,5 @@
 use rivulets_driver::element::{Element, ProcessStatus};
-use rivulets_driver::info::Info;
+use rivulets_driver::format::Format;
 use rivulets_driver::port::{InPort, OutPort, InPlacePort};
 use rivulets_driver::databus::{Consumer, DatabusRef, Producer, Transformer};
 use rivulets_driver::node::Node;
@@ -8,15 +8,15 @@ use crate::databus::{ConsumerHandle, ProducerHandle, TransformerHandle};
 
 /// A generic node that wraps any `Element`, connecting it to one input and one output.
 /// This is the most common type of node, used for processing/transformation tasks.
-pub struct ElementNode<E, DI, DO, INFO>
+pub struct ElementNode<E, DI, DO, F>
 where
-    E: Element<Info=INFO>,
+    E: Element<Format=F>,
     DI: DatabusRef,
     DO: DatabusRef,
     ConsumerHandle<DI::Databus, DI>: Consumer,
     ProducerHandle<DO::Databus, DO>: Producer,
     TransformerHandle<DO::Databus, DO>: Transformer,
-    INFO: Info,
+    F: Format,
 {
     element: E,
     databus_in: DI,
@@ -24,18 +24,18 @@ where
     in_port: InPort<ConsumerHandle<DI::Databus, DI>>,
     out_port: OutPort<ProducerHandle<DO::Databus, DO>>,
     in_place_port:  InPlacePort<TransformerHandle<DO::Databus, DO>>,
-    info: Option<INFO>,
+    format: Option<F>,
 }
 
-impl<E, DI, DO, INFO> ElementNode<E, DI, DO, INFO>
+impl<E, DI, DO, F> ElementNode<E, DI, DO, F>
 where
-    E: Element<Info=INFO>,
+    E: Element<Format=F>,
     DI: DatabusRef,
     DO: DatabusRef,
     ConsumerHandle<DI::Databus, DI>: Consumer,
     ProducerHandle<DO::Databus, DO>: Producer,
     TransformerHandle<DO::Databus, DO>: Transformer,
-    INFO: Info,
+    F: Format,
 {
     pub fn new(element: E, databus_in: DI, databus_out: DO) -> Self {
         Self {
@@ -45,20 +45,20 @@ where
             in_port: InPort::None,
             out_port: OutPort::None,
             in_place_port: InPlacePort::None,
-            info: None,
+            format: None,
         }
     }
 }
 
-impl<E, DI, DO, INFO> Node for ElementNode<E, DI, DO, INFO>
+impl<E, DI, DO, F> Node for ElementNode<E, DI, DO, F>
 where
-    E: Element<Info=INFO>,
+    E: Element<Format=F>,
     DI: DatabusRef,
     DO: DatabusRef,
     ConsumerHandle<DI::Databus, DI>: Consumer,
     ProducerHandle<DO::Databus, DO>: Producer,
     TransformerHandle<DO::Databus, DO>: Transformer,
-    INFO: Info,
+    F: Format,
 {
     type Error = E::Error;
 
