@@ -6,7 +6,6 @@ use rivulets_driver::node::Node;
 use crate::databus::{ConsumerHandle, ProducerHandle};
 
 pub struct Config {
-    // Explicitly named to indicate unit
     pub prefer_items_per_process: u16,
 }
 
