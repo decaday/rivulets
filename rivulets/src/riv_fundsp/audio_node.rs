@@ -1,5 +1,3 @@
-use fundsp::F32x;
-use fundsp::buffer::{BufferMut, BufferRef};
 use fundsp::{audionode::AudioNode, hacker::Frame, combinator::An};
 use fundsp::prelude::{U1, U0};
 
@@ -11,7 +9,7 @@ use rivulets_driver::{
     port::{InPlacePort, InPort, OutPort, PayloadSize, PortRequirements},
 };
 
-use super::buffer::SplitBuffer;
+use super::buffer::{SplitBuffer, SplitSourceBuffer, SplitSinkBuffer};
 
 pub struct Config {
     pub prefer_items_per_process: u16,
@@ -134,38 +132,18 @@ where
         
         let mut write_payload = producer.acquire_write(read_payload.len(), true).await;
 
-        // 2. Use SplitBuffer to handle alignment and split into scalar/SIMD parts.
-        // `read_payload` derefs to &[f32] and `write_payload` derefs to &mut [f32].
-        let split = SplitBuffer::new(&read_payload, &mut write_payload);
+        // 2. Use SplitBuffer to handle alignment and SIMD processing.
+        let mut split = SplitBuffer::new(&read_payload, &mut write_payload);
 
-        // 3. Process the unaligned head (scalar).
-        let (head_in, head_out) = split.head;
-        head_in.iter().zip(head_out.iter_mut()).for_each(|(i, o)| {
+        // 3. Process unaligned scalar edges (Head and Tail).
+        split.scalar_pairs().for_each(|(i, o)| {
             *o = self.node.tick(&Frame::from([*i]))[0];
         });
 
-        // 4. Process the aligned body (SIMD block).
-        let (body_in, body_out) = split.body;
-        if !body_in.is_empty() {
-            
-            let input_buffer = BufferRef::new(body_in);
-            let mut output_buffer = BufferMut::new(body_out);
-            
-            // Calculate total samples in the body part.
-            // Note: fundsp `process` size argument is usually in samples, not SIMD vectors.
-            // However, BufferRef length is checked internally.
-            // fundsp::AudioNode::process signature: (size: usize, input, output).
-            // `size` is the number of samples to process.
-            let samples = body_in.len() * fundsp::SIMD_LEN; // F32x len
-            
+        // 4. Process aligned SIMD body.
+        if let Some((samples, input_buffer, mut output_buffer)) = split.simd_parts() {
             self.node.process(samples, &input_buffer, &mut output_buffer);
         }
-
-        // 5. Process the unaligned tail (scalar).
-        let (tail_in, tail_out) = split.tail;
-        tail_in.iter().zip(tail_out.iter_mut()).for_each(|(i, o)| {
-            *o = self.node.tick(&Frame::from([*i]))[0];
-        });
 
         write_payload.set_valid_length(write_payload.len());
         write_payload.set_position(read_payload.position());
@@ -272,39 +250,20 @@ where
             .await;
 
         // 2. Handle SIMD Alignment for Output Only
-        // We can't use SplitBuffer here because there is no input.
-        let output_slice: &mut [f32] = &mut write_payload;
-        
-        // Safety: align_to_mut is safe for POD types like f32
-        let (head, body, tail) = unsafe { output_slice.align_to_mut::<F32x>() };
+        let mut split = SplitSourceBuffer::new(&mut write_payload);
 
-        // 3. Process Head (Scalar)
-        // Fundsp source tick takes an empty frame
-        for s in head.iter_mut() {
-            *s = self.node.tick(&Frame::default())[0];
-        }
+        // 3. Process unaligned scalar edges.
+        let empty_frame = Frame::default();
+        split.scalar_parts().for_each(|s| {
+            *s = self.node.tick(&empty_frame)[0];
+        });
 
-        // 4. Process Body (SIMD)
-        if !body.is_empty() {
-            let samples = body.len() * fundsp::SIMD_LEN;
-            
-            // Source process: input buffer is empty
-            let input_buffer = BufferRef::new(&[]);
-            // Output buffer needs to be wrapped
-            let mut output_buffer = BufferMut::new(body);
-
+        // 4. Process aligned SIMD body.
+        if let Some((samples, input_buffer, mut output_buffer)) = split.simd_parts() {
             self.node.process(samples, &input_buffer, &mut output_buffer);
         }
 
-        // 5. Process Tail (Scalar)
-        for s in tail.iter_mut() {
-            *s = self.node.tick(&Frame::default())[0];
-        }
-
         write_payload.set_valid_length(write_payload.len());
-        
-        // Source implies new data, position logic might need adjustment based on timestamp
-        // but for now default is fine.
         
         Ok(Fine)
     }
@@ -406,37 +365,19 @@ where
             .acquire_read(self.config.prefer_items_per_process as usize)
             .await;
 
-        let input_slice: &[f32] = &read_payload;
-
         // 2. Handle SIMD Alignment for Input Only
-        // Safety: align_to is safe for POD types like f32
-        let (head, body, tail) = unsafe { input_slice.align_to::<fundsp::F32x>() };
+        let mut split = SplitSinkBuffer::new(&read_payload);
 
-        // 3. Process Head (Scalar)
-        for s in head.iter() {
-            // Sink tick returns an empty frame
+        // 3. Process unaligned scalar edges.
+        split.scalar_parts().for_each(|s| {
             self.node.tick(&Frame::from([*s]));
-        }
+        });
 
-        // 4. Process Body (SIMD)
-        if !body.is_empty() {
-            let samples = body.len() * fundsp::SIMD_LEN;
-
-            // Input buffer wrapping
-            let input_buffer = BufferRef::new(body);
-            
-            // Output buffer is empty (0 channels)
-            let mut output_buffer = BufferMut::new(&mut []);
-
+        // 4. Process aligned SIMD body.
+        if let Some((samples, input_buffer, mut output_buffer)) = split.simd_parts() {
             self.node.process(samples, &input_buffer, &mut output_buffer);
         }
 
-        // 5. Process Tail (Scalar)
-        for s in tail.iter() {
-            self.node.tick(&Frame::from([*s]));
-        }
-
-        // Read payload is automatically released on drop
         Ok(Fine)
     }
 
