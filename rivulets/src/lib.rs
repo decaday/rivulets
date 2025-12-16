@@ -3,11 +3,11 @@
 pub mod fmt;
 
 pub mod utils;
-pub mod node;
+pub mod nodes;
+pub mod elements;
 pub mod databus;
 #[cfg(feature="fundsp")]
 pub mod riv_fundsp;
-
 
 pub use ringbuf::storage;
 
