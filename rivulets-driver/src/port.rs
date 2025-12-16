@@ -5,12 +5,8 @@ use crate::databus::{Consumer, Producer, Transformer};
 use crate::payload::{Metadata, ReadPayload, TransformPayload, WritePayload};
 
 /// Represents an input port for an `Element`.
-///
-/// An `Element` can receive data from a `Consumer`, which provides data payloads.
 pub enum InPort<C: Consumer> {
-    /// An upstream databus component that implements the `Consumer` trait.
     Consumer(C),
-    /// Represents no input, typically for source elements like generators.
     None,
 }
 
@@ -43,12 +39,8 @@ impl<C: Consumer> InPort<C> {
 }
 
 /// Represents an output port for an `Element`.
-///
-/// An `Element` can send data to a `Producer`, which accepts data payloads.
 pub enum OutPort<P: Producer> {
-    /// A downstream databus component that implements the `Producer` trait.
     Producer(P),
-    /// Represents no output, typically for sink elements.
     None,
 }
 
@@ -81,13 +73,8 @@ impl<P: Producer> OutPort<P> {
 }
 
 /// Represents an in-place transformation port for an `Element`.
-///
-/// An `Element` can perform in-place transformations using a `Transformer`.
-/// This is typically used for effects or filters that modify data in place.
 pub enum InPlacePort<T: Transformer> {
-    /// A databus component that implements the `Transformer` trait.
     Transformer(T),
-    /// Represents no in-place transformation.
     None,
 }
 
@@ -205,7 +192,7 @@ impl<T> Consumer for Dmy<T> {
     async fn acquire_read<'a>(&'a self, _len: usize) -> ReadPayload<'a, Self> {
         unimplemented!()
     }
-    fn release_read(&self, _consumed_bytes: usize) {
+    fn release_read(&self, _metadata: Metadata, _consumed_len: usize) {
         unimplemented!()
     }
 }
@@ -216,7 +203,7 @@ impl<T> Producer for Dmy<T> {
     async fn acquire_write<'a>(&'a self, _len: usize, _exact: bool) -> WritePayload<'a, Self> {
         unimplemented!()
     }
-    fn release_write(&self, _metadata: Metadata) {
+    fn release_write(&self, _metadata: Metadata, _written_len: usize) {
         unimplemented!()
     }
 }
@@ -227,7 +214,7 @@ impl<T> Transformer for Dmy<T> {
     async fn acquire_transform<'a>(&'a self, _len: usize) -> TransformPayload<'a, Self> {
         unimplemented!()
     }
-    fn release_transform(&self, _metadata: Metadata, _remaining_length: usize) {
+    fn release_transform(&self, _metadata: Metadata, _transformed_len: usize) {
         unimplemented!()
     }
 }

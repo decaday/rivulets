@@ -59,8 +59,8 @@ impl TryFrom<u8> for State {
 
 pub struct Slot<S: Storage> {
     storage: S,
-    payload_metadata: UnsafeCell<Option<Metadata>>,
-    // valid_length: AtomicUsize,
+    // Stores the metadata and the valid length of data in the buffer
+    payload_info: UnsafeCell<Option<(Metadata, usize)>>,
     state: AtomicU8,
     registry: ParticipantRegistry<(), (), ()>,
 }
@@ -71,14 +71,14 @@ impl<S: Storage> Slot<S> {
     pub fn new(storage: S) -> Self {
         Slot {
             storage,
-            payload_metadata: UnsafeCell::new(None),
+            payload_info: UnsafeCell::new(None),
             state: AtomicU8::new(State::Empty as u8),
             registry: ParticipantRegistry::new(),
         }
     }
 
     pub fn get_current_metadata(&self) -> Option<Metadata> {
-        unsafe { (*self.payload_metadata.get()).clone() }
+        unsafe { (*self.payload_info.get()).map(|(m, _)| m) }
     }
 }
 
@@ -140,11 +140,9 @@ where
                 State::Empty as u8, State::Writing as u8, Ordering::Acquire, Ordering::Relaxed
             ).is_ok() {
                 let buffer = unsafe { self.inner.storage.slice_mut(0..self.inner.storage.len()) };
-                // Casting MaybeUninit<T> slice to T slice for writing.
-                // Note: This pattern requires care if T is not plain old data, as we are creating
-                // &mut [T] to uninitialized memory.
-                let buffer_ready_for_write = unsafe { &mut *(buffer as *mut [MaybeUninit<S::Item>] as *mut [S::Item]) };
-                Poll::Ready(WritePayload::new(&mut buffer_ready_for_write[0..payload_len], self))
+                let buffer_ready = unsafe { &mut *(buffer as *mut [MaybeUninit<S::Item>] as *mut [S::Item]) };
+                // Pass the slice limited by requested length as capacity
+                Poll::Ready(WritePayload::new(&mut buffer_ready[0..payload_len], self))
             } else {
                 self.inner.registry.register_producer_waker(cx.waker());
                 Poll::Pending
@@ -152,9 +150,9 @@ where
         }).await
     }
 
-    fn release_write(&self, metadata: Metadata) {
+    fn release_write(&self, metadata: Metadata, written_len: usize) {
         unsafe {
-            *self.inner.payload_metadata.get() = Some(metadata);
+            *self.inner.payload_info.get() = Some((metadata, written_len));
         }
         let registration = self.inner.registry.registration();
 
@@ -183,14 +181,15 @@ where
             if self.inner.state.compare_exchange(
                 State::Full as u8, State::Transforming as u8, Ordering::Acquire, Ordering::Relaxed
             ).is_ok() {
-                let payload_len = unsafe { (*self.inner.payload_metadata.get()).unwrap().valid_length };
-                assert!(payload_len <= len);
+                let (_, valid_len) = unsafe { (*self.inner.payload_info.get()).unwrap() };
+                assert!(valid_len <= len);
 
                 let (buffer, metadata) = unsafe {
                     let buffer_mut = self.inner.storage.slice_mut(0..self.inner.storage.len());
                     let buffer_ready = &mut *(buffer_mut as *mut [MaybeUninit<S::Item>] as *mut [S::Item]);
-                    let metadata_ref = (*self.inner.payload_metadata.get()).unwrap();
-                    (&mut buffer_ready[0..payload_len], metadata_ref)
+                    let (metadata_ref, _) = (*self.inner.payload_info.get()).unwrap();
+                    // Provide only the valid input for in-place transformation
+                    (&mut buffer_ready[0..valid_len], metadata_ref)
                 };
                 Poll::Ready(TransformPayload::new(buffer, metadata, self))
             } else {
@@ -200,14 +199,16 @@ where
         }).await
     }
 
-    fn release_transform(&self, metadata: Metadata, remaining_length: usize) {
+    fn release_transform(&self, metadata: Metadata, transformed_len: usize) {
         trace!("Transformer releasing transform slot");
-        if remaining_length > 0 {
-            panic!("Transformer must consume all data in the slot. Partial consumption is not supported in Slot.");
+        let (_, input_len) = unsafe { (*self.inner.payload_info.get()).unwrap() };
+        
+        if transformed_len > input_len {
+             panic!("Transformer expanded data beyond input length, which is unsafe in this Slot implementation.");
         }
 
         unsafe {
-            *self.inner.payload_metadata.get() = Some(metadata);
+            *self.inner.payload_info.get() = Some((metadata, transformed_len));
         }
         self.inner.registry.reset_consumers_finished();
         self.inner.state.store(State::ReadyForRead as u8, Ordering::Release);
@@ -232,14 +233,15 @@ where
             }
 
             if self.inner.state.load(Ordering::Acquire) == State::ReadyForRead as u8 {
-                let payload_len = unsafe { (*self.inner.payload_metadata.get()).unwrap().valid_length };
-                assert!(payload_len <= len);
+                let (_, valid_len) = unsafe { (*self.inner.payload_info.get()).unwrap() };
+                assert!(valid_len <= len);
 
                 let (buffer, metadata) = unsafe {
                     let buffer_slice = self.inner.storage.slice_mut(0..self.inner.storage.len());
                     let buffer_ref = &*(buffer_slice as *const [MaybeUninit<S::Item>] as *const [S::Item]);
-                    let metadata_ref = (*self.inner.payload_metadata.get()).unwrap();
-                    (&buffer_ref[0..payload_len], metadata_ref)
+                    let (metadata_ref, _) = (*self.inner.payload_info.get()).unwrap();
+                    // Provide exactly the valid data slice
+                    (&buffer_ref[0..valid_len], metadata_ref)
                 };
                 Poll::Ready(ReadPayload::new(buffer, metadata, self))
             } else {
@@ -249,9 +251,12 @@ where
         }).await
     }
 
-    fn release_read(&self, remaining_length: usize) {
+    fn release_read(&self, _metadata: Metadata, consumed_len: usize) {
         trace!("Consumer {} releasing read slot", self.id);
-        if remaining_length > 0 {
+        
+        let (_, total_len) = unsafe { (*self.inner.payload_info.get()).unwrap() };
+
+        if consumed_len < total_len {
             panic!("Consumer must consume all data in the slot. Partial consumption is not supported in Slot.");
         }
 
@@ -262,7 +267,6 @@ where
         }
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -280,7 +284,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_producer_consumer_flow_no_transformer() {
-        // Specify u8 explicitly now
         let slot: StaticSlot<u8, 8> = StaticSlot::new_static();
         let static_slot: &'static Slot<_> = Box::leak(Box::new(slot));
         
@@ -288,16 +291,18 @@ mod tests {
         let consumer = ConsumerHandle::new(static_slot, PayloadSize { preferred: 4, min: 4 });
 
         let consumer_handle = tokio::spawn(async move {
-            let payload = consumer.acquire_read(8).await;
+            let mut payload = consumer.acquire_read(8).await;
             assert_eq!(payload.len(), 4);
             assert_eq!(&payload[..], &[1, 2, 3, 4]);
-            consumer.release_read(0);
+            // Verify commit_all behavior
+            payload.commit_all();
         });
 
         let mut write_payload = producer.acquire_write(8, false).await;
         assert_eq!(get_current_state(static_slot), State::Writing);
         write_payload[0..4].copy_from_slice(&[1, 2, 3, 4]);
-        write_payload.set_valid_length(4);
+        
+        write_payload.commit(4);
         
         drop(write_payload);
         assert_eq!(get_current_state(static_slot), State::ReadyForRead);
@@ -310,7 +315,6 @@ mod tests {
     #[tokio::test]
     #[cfg(feature="alloc")]
     async fn test_full_pipeline_flow_with_transformer_heap() {
-        // Specify u8 explicitly now
         let slot = HeapSlot::<u8>::new_heap(8);
         let slot = Arc::new(slot);
 
@@ -322,24 +326,28 @@ mod tests {
 
         let consumer_handle = tokio::spawn(async move {
             rx.await.expect("Failed to receive signal");
-            let payload = consumer.acquire_read(8).await;
+            let mut payload = consumer.acquire_read(8).await;
+            // Transformer output len was 4
             assert_eq!(payload.len(), 4);
             assert_eq!(&payload[..], &[11, 12, 13, 14]);
-            consumer.release_read(0);
+            payload.commit_all();
         });
         
         let transformer_handle = tokio::spawn(async move {
             let mut payload = transformer.acquire_transform(8).await;
+            // Transformer receives exactly what Producer wrote (valid_len=4)
+            assert_eq!(payload.len(), 4); 
             assert_eq!(&payload[..], &[1, 2, 3, 4]);
+            
             for byte in payload.iter_mut() {
                 *byte += 10;
             }
-            transformer.release_transform(payload.metadata, 0);
+            payload.commit_all();
         });
 
         let mut write_payload = producer.acquire_write(8, false).await;
         write_payload[0..4].copy_from_slice(&[1, 2, 3, 4]);
-        write_payload.set_valid_length(4);
+        write_payload.commit(4);
         
         drop(write_payload);
         assert_eq!(get_current_state(&slot), State::Full);
@@ -365,15 +373,18 @@ mod tests {
         let consumer = ConsumerHandle::new(slot.clone(), PayloadSize { preferred: 4, min: 4 });
 
         let consumer_handle = tokio::spawn(async move {
-            consumer.acquire_read(4).await;
+            // Should block until Transformer finishes
+            let mut payload = consumer.acquire_read(4).await;
+            payload.commit_all();
         });
 
         tokio::task::yield_now().await;
 
         let mut write_payload = producer.acquire_write(4, false).await;
-        write_payload.set_valid_length(4);
+        write_payload.commit_all(); // Writes 4 bytes (all acquired)
         drop(write_payload);
         
+        // State should stay Full (waiting for Transformer) not ReadyForRead
         assert_eq!(get_current_state(&slot), State::Full);
 
         let result = timeout(Duration::from_millis(50), consumer_handle).await;
@@ -393,7 +404,7 @@ mod tests {
             async move {
                 let mut write_payload = producer.acquire_write(4, false).await;
                 write_payload[0..4].copy_from_slice(&[10, 20, 30, 40]);
-                write_payload.set_valid_length(4);
+                write_payload.commit(4);
             }
         });
 
@@ -403,25 +414,27 @@ mod tests {
         let (c1_tx, c1_rx) = oneshot::channel();
 
         let consumer1_handle = tokio::spawn(async move {
-            let payload = consumer1.acquire_read(4).await;
+            let mut payload = consumer1.acquire_read(4).await;
             assert_eq!(&payload[..], &[10, 20, 30, 40]);
-            consumer1.release_read(0);
+            payload.commit_all();
         });
 
         let consumer2_handle = tokio::spawn(async move {
             c1_rx.await.unwrap();
-            let payload = consumer2.acquire_read(4).await;
+            let mut payload = consumer2.acquire_read(4).await;
             assert_eq!(&payload[..], &[10, 20, 30, 40]);
-            consumer2.release_read(0);
+            payload.commit_all();
         });
 
         consumer1_handle.await.unwrap();
 
+        // One consumer finished, but one remains, so state should still be ReadyForRead
         assert_eq!(get_current_state(&slot), State::ReadyForRead);
         c1_tx.send(()).unwrap();
 
         consumer2_handle.await.unwrap();
 
+        // Both finished, now it should be Empty
         assert_eq!(get_current_state(&slot), State::Empty);
     }
 }

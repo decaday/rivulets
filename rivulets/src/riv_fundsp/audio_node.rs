@@ -90,8 +90,6 @@ where
     }
 
     fn get_port_requirements(&self) -> PortRequirements {
-        // Request minimum 1 item (sample).
-        // The preferred size should be a multiple of SIMD width (e.g. 64) for best performance.
         let min = 1;
         PortRequirements {
             in_: Some(PayloadSize {
@@ -117,7 +115,6 @@ where
         _in_place_port: &mut InPlacePort<T>,
     ) -> ProcessResult<Self::Error>
     where
-        // Constraint: We currently only support f32 processing for fundsp nodes.
         C: Consumer<Item = Self::InputItem>,
         P: Producer<Item = Self::OutputItem>,
         T: Transformer<Item = Self::OutputItem>,
@@ -125,27 +122,28 @@ where
         let consumer = in_port.consumer_ref();
         let producer = out_port.producer_ref();
 
-        // 1. Acquire generic f32 payloads.
-        let read_payload = consumer
+        let mut read_payload = consumer
             .acquire_read(self.config.prefer_items_per_process as usize)
             .await;
         
         let mut write_payload = producer.acquire_write(read_payload.len(), true).await;
 
-        // 2. Use SplitBuffer to handle alignment and SIMD processing.
-        let mut split = SplitBuffer::new(&read_payload, &mut write_payload);
+        {
+            let mut split = SplitBuffer::new(&read_payload, &mut write_payload);
 
-        // 3. Process unaligned scalar edges (Head and Tail).
-        split.scalar_pairs().for_each(|(i, o)| {
-            *o = self.node.tick(&Frame::from([*i]))[0];
-        });
+            split.scalar_pairs().for_each(|(i, o)| {
+                *o = self.node.tick(&Frame::from([*i]))[0];
+            });
 
-        // 4. Process aligned SIMD body.
-        if let Some((samples, input_buffer, mut output_buffer)) = split.simd_parts() {
-            self.node.process(samples, &input_buffer, &mut output_buffer);
+            if let Some((samples, input_buffer, mut output_buffer)) = split.simd_parts() {
+                self.node.process(samples, &input_buffer, &mut output_buffer);
+            }
         }
-
-        write_payload.set_valid_length(write_payload.len());
+        
+        let processed_len = read_payload.len();
+        read_payload.commit(processed_len);
+        
+        write_payload.commit(processed_len);
         write_payload.set_position(read_payload.position());
 
         Ok(Fine)
@@ -174,8 +172,6 @@ where
 {
     pub fn new(node: U, out_format: F, config: Config) -> Self {
         assert!(out_format.valid());
-        // Source currently assumes Mono output based on Format trait limits,
-        // but can be extended later.
         assert!(out_format.is_mono());
 
         Self {
@@ -196,7 +192,6 @@ where
     F: Format,
 {
     type Format = F;
-    // Source has no input data, use () as placeholder
     type InputItem = (); 
     type OutputItem = f32;
     const TYPE: ElementType = ElementType::Source;
@@ -211,14 +206,13 @@ where
     }
 
     fn available(&self) -> u32 {
-        // Sources are infinite
         u32::MAX
     }
 
     fn get_port_requirements(&self) -> PortRequirements {
         let min = 1;
         PortRequirements {
-            in_: None, // No input port needed
+            in_: None,
             out: Some(PayloadSize {
                 min,
                 preferred: self.config.prefer_items_per_process,
@@ -244,26 +238,21 @@ where
     {
         let producer = out_port.producer_ref();
 
-        // 1. Only acquire write payload
         let mut write_payload = producer
             .acquire_write(self.config.prefer_items_per_process as usize, true)
             .await;
 
-        // 2. Handle SIMD Alignment for Output Only
         let mut split = SplitSourceBuffer::new(&mut write_payload);
 
-        // 3. Process unaligned scalar edges.
         let empty_frame = Frame::default();
         split.scalar_parts().for_each(|s| {
             *s = self.node.tick(&empty_frame)[0];
         });
 
-        // 4. Process aligned SIMD body.
         if let Some((samples, input_buffer, mut output_buffer)) = split.simd_parts() {
             self.node.process(samples, &input_buffer, &mut output_buffer);
         }
-
-        write_payload.set_valid_length(write_payload.len());
+        write_payload.commit_all();
         
         Ok(Fine)
     }
@@ -274,8 +263,6 @@ where
     }
 }
 
-/// A sink element that consumes audio data into a FunDSP node with no outputs (U1 -> U0).
-/// Useful for monitoring, analysis, or side-effects.
 pub struct FundspSinkElement<U, F>
 where
     U: AudioNode<Inputs = U1, Outputs = U0>,
@@ -293,7 +280,6 @@ where
 {
     pub fn new(node: U, in_format: F, config: Config) -> Self {
         assert!(in_format.valid());
-        // Sink currently assumes Mono input based on Format trait limits.
         assert!(in_format.is_mono());
 
         Self {
@@ -360,24 +346,21 @@ where
     {
         let consumer = in_port.consumer_ref();
 
-        // 1. Only acquire read payload
-        let read_payload = consumer
+        let mut read_payload = consumer
             .acquire_read(self.config.prefer_items_per_process as usize)
             .await;
 
-        // 2. Handle SIMD Alignment for Input Only
         let mut split = SplitSinkBuffer::new(&read_payload);
 
-        // 3. Process unaligned scalar edges.
         split.scalar_parts().for_each(|s| {
             self.node.tick(&Frame::from([*s]));
         });
 
-        // 4. Process aligned SIMD body.
         if let Some((samples, input_buffer, mut output_buffer)) = split.simd_parts() {
             self.node.process(samples, &input_buffer, &mut output_buffer);
         }
-
+        
+        read_payload.commit_all();
         Ok(Fine)
     }
 

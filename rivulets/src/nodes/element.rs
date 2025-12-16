@@ -24,7 +24,7 @@ where
     in_port: InPort<ConsumerHandle<DI::Databus, DI>>,
     out_port: OutPort<ProducerHandle<DO::Databus, DO>>,
     in_place_port:  InPlacePort<TransformerHandle<DO::Databus, DO>>,
-    format: Option<F>,
+    _format: Option<F>,
 }
 
 impl<E, DI, DO, F> ElementNode<E, DI, DO, F>
@@ -45,7 +45,7 @@ where
             in_port: InPort::None,
             out_port: OutPort::None,
             in_place_port: InPlacePort::None,
-            format: None,
+            _format: None,
         }
     }
 }

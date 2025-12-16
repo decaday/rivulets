@@ -1,55 +1,16 @@
 use core::ops::{Deref, DerefMut};
-
-macro_rules! impl_deref_valid_length {
-    ($struct_name:ident, <'a, $g:ident: $trait:path>) => {
-        impl<'a, $g: $trait> Deref for $struct_name<'a, $g> {
-            type Target = [$g::Item];
-            /// Dereferences to a slice containing only the valid data.
-            fn deref(&self) -> &Self::Target {
-                &self.data[..self.metadata.valid_length]
-            }
-        }
-    };
-}
-
-macro_rules! impl_deref_full_data {
-    ($struct_name:ident, <'a, $g:ident: $trait:path>) => {
-        impl<'a, $g: $trait> Deref for $struct_name<'a, $g> {
-            type Target = [$g::Item];
-            fn deref(&self) -> &Self::Target {
-                self.data
-            }
-        }
-    };
-}
-
-macro_rules! impl_deref_mut_full_data {
-    ($struct_name:ident, <'a, $g:ident: $trait:path>) => {
-        impl<'a, $g: $trait> DerefMut for $struct_name<'a, $g> {
-            fn deref_mut(&mut self) -> &mut <Self as Deref>::Target {
-                self.data
-            }
-        }
-    };
-}
-
 use crate::databus::{Consumer, Producer, Transformer};
 
-/// Metadata for payload data, including position and length information.
+/// Metadata for payload data, describing stream properties.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Metadata {
     /// Position of this payload in a sequence.
     pub position: Position,
-    /// Length of valid data in the payload buffer, in items (elements).
-    pub valid_length: usize,
 }
 
 impl Metadata {
-    pub fn new(position: Position, valid_length: usize) -> Self {
-        Self {
-            position,
-            valid_length,
-        }
+    pub fn new(position: Position) -> Self {
+        Self { position }
     }
 }
 
@@ -72,22 +33,32 @@ pub enum Position {
 
 /// A RAII guard representing a readable buffer acquired from a `Consumer`.
 ///
-/// When this guard is dropped, the buffer is automatically released back to the `Consumer`.
-/// This payload provides immutable access to the data.
+/// The `data` slice contains only valid data provided by the Databus.
+/// Dropping this guard automatically releases the buffer back to the `Consumer`.
 pub struct ReadPayload<'a, C: Consumer> {
     pub data: &'a [C::Item],
     pub metadata: Metadata,
-    remaining_length: usize,
+    consumed_len: usize,
     consumer: &'a C,
 }
 
 impl<'a, C: Consumer> ReadPayload<'a, C> {
     pub fn new(data: &'a [C::Item], metadata: Metadata, consumer: &'a C) -> Self {
-        Self { data, metadata, remaining_length: 0, consumer }
+        Self {
+            data,
+            metadata,
+            consumed_len: 0,
+            consumer,
+        }
     }
 
-    pub fn set_remaining_length(&mut self, length: usize) {
-        self.remaining_length = length;
+    /// Marks the specified amount of data as consumed.
+    pub fn commit(&mut self, len: usize) {
+        self.consumed_len = len.min(self.data.len());
+    }
+
+    pub fn commit_all(&mut self) {
+        self.consumed_len = self.data.len();
     }
 
     pub fn position(&self) -> Position {
@@ -95,11 +66,16 @@ impl<'a, C: Consumer> ReadPayload<'a, C> {
     }
 }
 
-impl_deref_valid_length!(ReadPayload, <'a, C: Consumer>);
+impl<'a, C: Consumer> Deref for ReadPayload<'a, C> {
+    type Target = [C::Item];
+    fn deref(&self) -> &Self::Target {
+        self.data
+    }
+}
 
 impl<'a, C: Consumer> Drop for ReadPayload<'a, C> {
     fn drop(&mut self) {
-        self.consumer.release_read(self.remaining_length);
+        self.consumer.release_read(self.metadata, self.consumed_len);
     }
 }
 
@@ -107,11 +83,12 @@ impl<'a, C: Consumer> Drop for ReadPayload<'a, C> {
 
 /// A RAII guard representing a writable buffer acquired from a `Producer`.
 ///
-/// When this guard is dropped, the written data and its metadata are "committed"
-/// back to the `Producer`.
+/// The `data` slice represents the full available capacity.
+/// Dropping this guard automatically commits the written data.
 pub struct WritePayload<'a, P: Producer> {
     data: &'a mut [P::Item],
     pub metadata: Metadata,
+    written_len: usize,
     producer: &'a P,
 }
 
@@ -120,13 +97,18 @@ impl<'a, P: Producer> WritePayload<'a, P> {
         Self {
             data,
             metadata: Metadata::default(),
+            written_len: 0,
             producer,
         }
     }
 
-    /// Sets the length of the valid data written to the payload.
-    pub fn set_valid_length(&mut self, length: usize) {
-        self.metadata.valid_length = length.min(self.data.len());
+    /// Commits the specified amount of written data.
+    pub fn commit(&mut self, len: usize) {
+        self.written_len = len.min(self.data.len());
+    }
+
+    pub fn commit_all(&mut self) {
+        self.written_len = self.data.len();
     }
 
     /// Sets the position of this payload within a sequence.
@@ -135,49 +117,74 @@ impl<'a, P: Producer> WritePayload<'a, P> {
     }
 }
 
-impl_deref_full_data!(WritePayload, <'a, P: Producer>);
-impl_deref_mut_full_data!(WritePayload, <'a, P: Producer>);
+impl<'a, P: Producer> Deref for WritePayload<'a, P> {
+    type Target = [P::Item];
+    fn deref(&self) -> &Self::Target {
+        self.data
+    }
+}
+
+impl<'a, P: Producer> DerefMut for WritePayload<'a, P> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.data
+    }
+}
 
 impl<'a, P: Producer> Drop for WritePayload<'a, P> {
     fn drop(&mut self) {
-        self.producer.release_write(self.metadata);
+        self.producer.release_write(self.metadata, self.written_len);
     }
 }
 
 // --- Transform Payload ---
 
-/// A RAII guard representing a readable and writable buffer for in-place operations.
+/// A RAII guard representing a buffer for in-place transformation.
 ///
-/// Acquired from a `Transformer`. When this guard is dropped, the transformation is
-/// considered complete, making the buffer available for the next consumer or transformer.
+/// The `data` slice contains the input data to be transformed.
+/// Expansion of data (output > input) is not supported.
 pub struct TransformPayload<'a, T: Transformer> {
     data: &'a mut [T::Item],
     pub metadata: Metadata,
-    remaining_length: usize,
+    transformed_len: usize,
     transformer: &'a T,
 }
 
 impl<'a, T: Transformer> TransformPayload<'a, T> {
     pub fn new(data: &'a mut [T::Item], metadata: Metadata, transformer: &'a T) -> Self {
-        Self { data, metadata, remaining_length: 0, transformer }
+        Self {
+            data,
+            metadata,
+            transformed_len: 0,
+            transformer,
+        }
     }
 
-    /// Allows the transformer to update the valid length if the transformation
-    /// changes the amount of data (e.g., compression).
-    pub fn set_valid_length(&mut self, length: usize) {
-        self.metadata.valid_length = length.min(self.data.len());
+    /// Commits the specified amount of transformed data.
+    /// This length must not exceed the input length.
+    pub fn commit(&mut self, len: usize) {
+        self.transformed_len = len.min(self.data.len());
     }
 
-    pub fn set_remaining_length(&mut self, length: usize) {
-        self.remaining_length = length;
+    pub fn commit_all(&mut self) {
+        self.transformed_len = self.data.len();
     }
 }
 
-impl_deref_valid_length!(TransformPayload, <'a, T: Transformer>);
-impl_deref_mut_full_data!(TransformPayload, <'a, T: Transformer>);
+impl<'a, T: Transformer> Deref for TransformPayload<'a, T> {
+    type Target = [T::Item];
+    fn deref(&self) -> &Self::Target {
+        self.data
+    }
+}
+
+impl<'a, T: Transformer> DerefMut for TransformPayload<'a, T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.data
+    }
+}
 
 impl<'a, T: Transformer> Drop for TransformPayload<'a, T> {
     fn drop(&mut self) {
-        self.transformer.release_transform(self.metadata, self.remaining_length);
+        self.transformer.release_transform(self.metadata, self.transformed_len);
     }
 }

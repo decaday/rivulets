@@ -34,7 +34,7 @@ where
     consumer: ConsumerHandle<DI::Databus, DI>,
     producer1: ProducerHandle<DO1::Databus, DO1>,
     producer2: ProducerHandle<DO2::Databus, DO2>,
-    format: F,
+    _format: F,
     config: Config,
 }
 
@@ -62,7 +62,7 @@ where
             consumer: ConsumerHandle::new(databus_in, PayloadSize::new(min, preferred)),
             producer1: ProducerHandle::new(databus_out1, PayloadSize::new(min, preferred)),
             producer2: ProducerHandle::new(databus_out2, PayloadSize::new(min, preferred)),
-            format: in_format,
+            _format: in_format,
             config,
         }
     }
@@ -92,7 +92,7 @@ where
         loop {
             let payload_size = self.config.prefer_items_per_process as usize;
             
-            let read_payload = self.consumer.acquire_read(payload_size).await;
+            let mut read_payload = self.consumer.acquire_read(payload_size).await;
             let actual_len = read_payload.len();
 
             let mut write_payload1 = self.producer1.acquire_write(actual_len, true).await;
@@ -101,8 +101,9 @@ where
             write_payload1[..actual_len].copy_from_slice(&read_payload[..actual_len]);
             write_payload2[..actual_len].copy_from_slice(&read_payload[..actual_len]);
 
-            write_payload1.set_valid_length(actual_len);
-            write_payload2.set_valid_length(actual_len);
+            read_payload.commit(actual_len);
+            write_payload1.commit(actual_len);
+            write_payload2.commit(actual_len);
             
             write_payload1.set_position(read_payload.position());
             write_payload2.set_position(read_payload.position());

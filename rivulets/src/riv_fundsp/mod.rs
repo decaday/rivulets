@@ -42,12 +42,14 @@ mod tests {
             .unwrap();
 
         // Verify output
-        let payload = consumer.acquire_read(64).await;
+        let mut payload = consumer.acquire_read(64).await;
         assert_eq!(payload.len(), 64);
         for &sample in payload.iter() {
             assert_eq!(sample, -4.0);
         }
-        consumer.release_read(0);
+        
+        // Commit consumed data
+        payload.commit(64);
     }
 
     #[tokio::test]
@@ -73,12 +75,12 @@ mod tests {
             .unwrap();
 
         // Verify output range
-        let payload = consumer.acquire_read(64).await;
+        let mut payload = consumer.acquire_read(64).await;
         assert_eq!(payload.len(), 64);
         for &sample in payload.iter() {
             assert!(sample >= -0.5 && sample <= 0.5, "Sample {} out of range", sample);
         }
-        consumer.release_read(0);
+        payload.commit(64);
     }
 
     #[tokio::test]
@@ -156,7 +158,7 @@ mod tests {
                 .unwrap();
 
             // C. Verification (reads Bus 2)
-            let payload = verify_cons.acquire_read(chunk_size).await;
+            let mut payload = verify_cons.acquire_read(chunk_size).await;
             
             for (i, &sample) in payload.iter().enumerate() {
                 let global_sample_idx = processed_samples + i;
@@ -184,7 +186,7 @@ mod tests {
                 }
             }
             
-            verify_cons.release_read(0);
+            payload.commit(chunk_size);
             processed_samples += chunk_size;
         }
     }
