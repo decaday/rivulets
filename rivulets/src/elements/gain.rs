@@ -5,18 +5,7 @@ use rivulets_driver::element::{Element, ElementType, ProcessResult, ProcessStatu
 use rivulets_driver::format::Format;
 use rivulets_driver::port::{InPlacePort, InPort, OutPort, PayloadSize, PortRequirements};
 
-#[derive(Debug, Clone, Copy)]
-pub struct Config {
-    pub prefer_items_per_process: u16,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            prefer_items_per_process: 64,
-        }
-    }
-}
+pub use crate::StandardConfig as Config;
 
 pub struct Gain<F, T> {
     factor: T,

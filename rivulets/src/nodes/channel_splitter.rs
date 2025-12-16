@@ -5,17 +5,7 @@ use rivulets_driver::node::Node;
 
 use crate::databus::{ConsumerHandle, ProducerHandle};
 
-pub struct Config {
-    pub prefer_items_per_process: u16,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self { 
-            prefer_items_per_process: 64, 
-        }
-    }
-}
+pub use crate::StandardConfig as Config;
 
 pub struct ChannelSplitter2<DI, DO1, DO2, F, T>
 where
