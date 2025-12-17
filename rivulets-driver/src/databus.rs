@@ -44,7 +44,7 @@ pub trait Producer: Sized {
     type Item: Sized;
 
     /// Asynchronously acquires a payload for writing data.
-    async fn acquire_write<'a>(&'a self, len: usize, exact: bool) -> WritePayload<'a, Self>;
+    async fn acquire_write<'a>(&'a self, len: usize) -> WritePayload<'a, Self>;
 
     /// Called by `WritePayload` on drop.
     fn release_write(&self, metadata: Metadata, written_len: usize);

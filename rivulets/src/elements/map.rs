@@ -55,6 +55,7 @@ where
         PortRequirements::new_in_place(PayloadSize {
             min: 1,
             preferred: self.config.prefer_items_per_process,
+            exact: false,
         })
     }
 

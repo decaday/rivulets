@@ -103,11 +103,14 @@ pub struct PortRequirements {
 pub struct PayloadSize {
     pub min: u16,
     pub preferred: u16,
+    /// Indicates whether the producer requires the buffer to be physically contiguous
+    /// and exactly the requested size (if possible).
+    pub exact: bool,
 }
 
 impl PayloadSize {
-    pub fn new(min: u16, preferred: u16) -> Self {
-        Self { min, preferred }
+    pub fn new(min: u16, preferred: u16, exact: bool) -> Self {
+        Self { min, preferred, exact }
     }
 }
 
@@ -200,7 +203,7 @@ impl<T> Consumer for Dmy<T> {
 impl<T> Producer for Dmy<T> {
     type Item = T;
 
-    async fn acquire_write<'a>(&'a self, _len: usize, _exact: bool) -> WritePayload<'a, Self> {
+    async fn acquire_write<'a>(&'a self, _len: usize) -> WritePayload<'a, Self> {
         unimplemented!()
     }
     fn release_write(&self, _metadata: Metadata, _written_len: usize) {

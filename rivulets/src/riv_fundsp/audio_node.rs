@@ -92,14 +92,8 @@ where
     fn get_port_requirements(&self) -> PortRequirements {
         let min = 1;
         PortRequirements {
-            in_: Some(PayloadSize {
-                min,
-                preferred: self.config.prefer_items_per_process,
-            }),
-            out: Some(PayloadSize {
-                min,
-                preferred: self.config.prefer_items_per_process,
-            }),
+            in_: Some(PayloadSize::new(min, self.config.prefer_items_per_process, false)),
+            out: Some(PayloadSize::new(min, self.config.prefer_items_per_process, false)),
             in_place: None,
         }
     }
@@ -122,14 +116,17 @@ where
         let consumer = in_port.consumer_ref();
         let producer = out_port.producer_ref();
 
-        let mut read_payload = consumer
-            .acquire_read(self.config.prefer_items_per_process as usize)
+        let mut write_payload = producer
+            .acquire_write(self.config.prefer_items_per_process as usize)
             .await;
         
-        let mut write_payload = producer.acquire_write(read_payload.len(), true).await;
+        let mut read_payload = consumer.acquire_read(write_payload.len()).await;
+        
+        let process_len = read_payload.len();
+        let write_slice = &mut write_payload[..process_len];
 
         {
-            let mut split = SplitBuffer::new(&read_payload, &mut write_payload);
+            let mut split = SplitBuffer::new(&read_payload, write_slice);
 
             split.scalar_pairs().for_each(|(i, o)| {
                 *o = self.node.tick(&Frame::from([*i]))[0];
@@ -140,10 +137,8 @@ where
             }
         }
         
-        let processed_len = read_payload.len();
-        read_payload.commit(processed_len);
-        
-        write_payload.commit(processed_len);
+        read_payload.commit(process_len);
+        write_payload.commit(process_len);
         write_payload.set_position(read_payload.position());
 
         Ok(Fine)
@@ -213,10 +208,7 @@ where
         let min = 1;
         PortRequirements {
             in_: None,
-            out: Some(PayloadSize {
-                min,
-                preferred: self.config.prefer_items_per_process,
-            }),
+            out: Some(PayloadSize::new(min, self.config.prefer_items_per_process, false)),
             in_place: None,
         }
     }
@@ -239,7 +231,7 @@ where
         let producer = out_port.producer_ref();
 
         let mut write_payload = producer
-            .acquire_write(self.config.prefer_items_per_process as usize, true)
+            .acquire_write(self.config.prefer_items_per_process as usize)
             .await;
 
         let mut split = SplitSourceBuffer::new(&mut write_payload);
@@ -252,6 +244,7 @@ where
         if let Some((samples, input_buffer, mut output_buffer)) = split.simd_parts() {
             self.node.process(samples, &input_buffer, &mut output_buffer);
         }
+
         write_payload.commit_all();
         
         Ok(Fine)
@@ -320,10 +313,7 @@ where
     fn get_port_requirements(&self) -> PortRequirements {
         let min = 1;
         PortRequirements {
-            in_: Some(PayloadSize {
-                min,
-                preferred: self.config.prefer_items_per_process,
-            }),
+            in_: Some(PayloadSize::new(min, self.config.prefer_items_per_process, false)),
             out: None,
             in_place: None,
         }
@@ -359,7 +349,7 @@ where
         if let Some((samples, input_buffer, mut output_buffer)) = split.simd_parts() {
             self.node.process(samples, &input_buffer, &mut output_buffer);
         }
-        
+
         read_payload.commit_all();
         Ok(Fine)
     }

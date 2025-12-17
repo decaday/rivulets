@@ -56,10 +56,12 @@ where
             PayloadSize {
                 min: 1,
                 preferred: self.config.prefer_items_per_process,
+                exact: false,
             },
             PayloadSize {
                 min: 1,
                 preferred: self.config.prefer_items_per_process,
+                exact: false,
             },
         )
     }
@@ -84,19 +86,17 @@ where
 
         let len = self.config.prefer_items_per_process as usize;
         
-        let mut read_payload = consumer.acquire_read(len).await;
+        let mut write_payload = producer.acquire_write(len).await;
+
+        let mut read_payload = consumer.acquire_read(write_payload.len()).await;
         let actual_len = read_payload.len();
-
-        // Acquire a write buffer matching the input length exactly
-        let mut write_payload = producer.acquire_write(actual_len, true).await;
-
-        for (in_item, out_item) in read_payload.iter().zip(write_payload.iter_mut()) {
+        
+        for (in_item, out_item) in read_payload.iter().zip(write_payload[..actual_len].iter_mut()) {
             *out_item = in_item.as_();
         }
 
         read_payload.commit_all();
-
-        write_payload.commit_all();
+        write_payload.commit(actual_len);
         write_payload.set_position(read_payload.position());
 
         Ok(ProcessStatus::Fine)

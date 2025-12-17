@@ -48,6 +48,7 @@ where
         PortRequirements::source(PayloadSize {
             min: 1,
             preferred: self.config.prefer_items_per_process,
+            exact: false,
         })
     }
 
@@ -69,7 +70,7 @@ where
         let producer = out_port.producer_ref();
 
         let len = self.config.prefer_items_per_process as usize;
-        let mut payload = producer.acquire_write(len, false).await;
+        let mut payload = producer.acquire_write(len).await;
 
         payload.fill(self.value);
 

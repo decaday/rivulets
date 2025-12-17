@@ -19,6 +19,7 @@ mod tests {
     pub const DEFAULT_PAYLOAD_SIZE: PayloadSize = PayloadSize {
         min: 1,
         preferred: 64,
+        exact: false,
     };
 
     #[tokio::test]
@@ -47,9 +48,7 @@ mod tests {
         for &sample in payload.iter() {
             assert_eq!(sample, -4.0);
         }
-        
-        // Commit consumed data
-        payload.commit(64);
+        payload.commit_all();
     }
 
     #[tokio::test]
@@ -80,7 +79,7 @@ mod tests {
         for &sample in payload.iter() {
             assert!(sample >= -0.5 && sample <= 0.5, "Sample {} out of range", sample);
         }
-        payload.commit(64);
+        payload.commit_all();
     }
 
     #[tokio::test]
@@ -186,7 +185,7 @@ mod tests {
                 }
             }
             
-            payload.commit(chunk_size);
+            payload.commit_all();
             processed_samples += chunk_size;
         }
     }
