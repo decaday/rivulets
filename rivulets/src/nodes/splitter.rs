@@ -7,7 +7,7 @@ use crate::databus::{ConsumerHandle, ProducerHandle};
 
 pub use crate::StandardConfig as Config;
 
-pub struct ChannelSplitter2<DI, DO1, DO2, F, T>
+pub struct Splitter2<DI, DO1, DO2, F, T>
 where
     DI: DatabusRef,
     DO1: DatabusRef,
@@ -28,7 +28,7 @@ where
     config: Config,
 }
 
-impl<DI, DO1, DO2, F, T> ChannelSplitter2<DI, DO1, DO2, F, T>
+impl<DI, DO1, DO2, F, T> Splitter2<DI, DO1, DO2, F, T>
 where
     DI: DatabusRef,
     DO1: DatabusRef,
@@ -58,7 +58,7 @@ where
     }
 }
 
-impl<DI, DO1, DO2, F, T> Node for ChannelSplitter2<DI, DO1, DO2, F, T>
+impl<DI, DO1, DO2, F, T> Node for Splitter2<DI, DO1, DO2, F, T>
 where
     DI: DatabusRef,
     DO1: DatabusRef,

@@ -1,2 +1,2 @@
 pub mod element;
-pub mod channel_splitter;
+pub mod splitter;
