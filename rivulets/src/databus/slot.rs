@@ -85,15 +85,16 @@ impl<S: Storage> Slot<S> {
 impl<S: Storage> Databus for Slot<S> {
     type Item = S::Item;
 
-    fn do_register_producer(&self, payload_size: PayloadSize) {
-        self.registry.register_producer(payload_size.exact);
+    fn do_register_producer(&self, payload_size: PayloadSize, strict_alloc: bool) {
+        self.registry.register_producer(strict_alloc);
         // Slot natively supports exact writes up to its capacity, so we don't strictly need to store the exact flag yet.
         if payload_size.preferred as usize > self.storage.len() {
             warn!("Slot buffer({}) is smaller than preferred size({})", self.storage.len(), payload_size.preferred);
         }
     }
 
-    fn do_register_consumer(&self, payload_size: PayloadSize) -> u8 {
+    fn do_register_consumer(&self, payload_size: PayloadSize, consume_all: bool) -> u8 {
+        assert!(consume_all, "Slot consumer must consume all data in the slot.");
         let id = self.registry.register_consumer(());
         if payload_size.preferred as usize > self.storage.len() {
             warn!("Slot buffer({}) is smaller than preferred size({})", self.storage.len(), payload_size.preferred);
@@ -101,7 +102,8 @@ impl<S: Storage> Databus for Slot<S> {
         id
     }
 
-    fn do_register_transformer(&self, payload_size: PayloadSize) {
+    fn do_register_transformer(&self, payload_size: PayloadSize, _strict_alloc: bool, consume_all: bool) {
+        assert!(consume_all, "Slot transformer must consume all data in the slot.");
         self.registry.register_transformer(());
         if payload_size.preferred as usize > self.storage.len() {
              warn!("Slot buffer({}) is smaller than preferred size({})", self.storage.len(), payload_size.preferred);
@@ -286,8 +288,8 @@ mod tests {
         let slot: StaticSlot<u8, 8> = StaticSlot::new_static();
         let static_slot: &'static Slot<_> = Box::leak(Box::new(slot));
         
-        let producer = ProducerHandle::new(static_slot, PayloadSize::new(4, 4, false));
-        let consumer = ConsumerHandle::new(static_slot, PayloadSize::new(4, 4, false));
+        let producer = ProducerHandle::new(static_slot, PayloadSize::new(4, 4), false);
+        let consumer = ConsumerHandle::new(static_slot, PayloadSize::new(4, 4), true);
 
         let consumer_handle = tokio::spawn(async move {
             let mut payload = consumer.acquire_read(8).await;
@@ -315,9 +317,9 @@ mod tests {
         let slot = HeapSlot::<u8>::new_heap(8);
         let slot = Arc::new(slot);
 
-        let producer = ProducerHandle::new(slot.clone(), PayloadSize::new(4, 4, false));
-        let transformer = TransformerHandle::new(slot.clone(), PayloadSize::new(4, 4, false));
-        let consumer = ConsumerHandle::new(slot.clone(), PayloadSize::new(4, 4, false));
+        let producer = ProducerHandle::new(slot.clone(), PayloadSize::new(4, 4), false);
+        let transformer = TransformerHandle::new(slot.clone(), PayloadSize::new(4, 4), false, true);
+        let consumer = ConsumerHandle::new(slot.clone(), PayloadSize::new(4, 4), true);
 
         let (tx, rx) = oneshot::channel();
 
@@ -361,9 +363,9 @@ mod tests {
         let slot: StaticSlot<u8, 8> = StaticSlot::new_static();
         let slot = Arc::new(slot);
 
-        let producer = ProducerHandle::new(slot.clone(), PayloadSize::new(4, 4, false));
-        TransformerHandle::new(slot.clone(), PayloadSize::new(4, 4, false));
-        let consumer = ConsumerHandle::new(slot.clone(), PayloadSize::new(4, 4, false));
+        let producer = ProducerHandle::new(slot.clone(), PayloadSize::new(4, 4), false);
+        TransformerHandle::new(slot.clone(), PayloadSize::new(4, 4), false, true);
+        let consumer = ConsumerHandle::new(slot.clone(), PayloadSize::new(4, 4), true);
 
         let consumer_handle = tokio::spawn(async move {
             let mut payload = consumer.acquire_read(4).await;
@@ -387,9 +389,9 @@ mod tests {
         let slot: StaticSlot<u8, 8> = StaticSlot::new_static();
         let slot = Arc::new(slot);
 
-        let producer = ProducerHandle::new(slot.clone(), PayloadSize::new(4, 4, false));
-        let consumer1 = ConsumerHandle::new(slot.clone(), PayloadSize::new(4, 4, false));
-        let consumer2 = ConsumerHandle::new(slot.clone(), PayloadSize::new(4, 4, false));
+        let producer = ProducerHandle::new(slot.clone(), PayloadSize::new(4, 4), false);
+        let consumer1 = ConsumerHandle::new(slot.clone(), PayloadSize::new(4, 4), true);
+        let consumer2 = ConsumerHandle::new(slot.clone(), PayloadSize::new(4, 4), true);
         
         let producer_handle = tokio::spawn({
             async move {

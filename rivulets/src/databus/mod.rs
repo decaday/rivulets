@@ -1,5 +1,5 @@
 use rivulets_driver::databus::{Databus, DatabusRef};
-use rivulets_driver::port::PayloadSize;
+use rivulets_driver::port::{PayloadSize, PortRequirements};
 
 pub mod slot;
 
@@ -22,23 +22,51 @@ mod handles {
     }
 
     impl<D: Databus, P: DatabusRef<Databus=D>> ProducerHandle<D, P> {
-        pub fn new(databus: P, payload_size: PayloadSize) -> Self {
-            databus.do_register_producer(payload_size);
+        pub fn new(databus: P, payload_size: PayloadSize, strict_alloc: bool) -> Self {
+            databus.do_register_producer(payload_size, strict_alloc);
             Self { inner: databus }
+        }
+
+        pub fn from_port_requirements(databus: P, reqs: &PortRequirements) -> Option<Self> {
+            if let Some(payload_size) = reqs.out {
+                Some(Self::new(databus, payload_size, reqs.strict_alloc))
+            } else {
+                None
+            }
         }
     }
 
     impl<D: Databus, P: DatabusRef<Databus=D>> ConsumerHandle<D, P> {
-        pub fn new(databus: P, payload_size: PayloadSize) -> Self {
-            let id = databus.do_register_consumer(payload_size);
+        pub fn new(databus: P, payload_size: PayloadSize, consume_all: bool) -> Self {
+            let id = databus.do_register_consumer(payload_size, consume_all);
             Self { inner: databus, id }
+        }
+
+        pub fn from_port_requirements(databus: P, reqs: &PortRequirements) -> Option<Self> {
+            if let Some(payload_size) = reqs.in_ {
+                Some(Self::new(databus, payload_size, reqs.consume_all))
+            } else {
+                None
+            }
         }
     }
 
     impl<D: Databus, P: DatabusRef<Databus=D>> TransformerHandle<D, P> {
-        pub fn new(databus: P, payload_size: PayloadSize) -> Self {
-            databus.do_register_transformer(payload_size);
+        pub fn new(databus: P, payload_size: PayloadSize, strict_alloc: bool, consume_all: bool) -> Self {
+            databus.do_register_transformer(payload_size, strict_alloc, consume_all);
             Self { inner: databus }
+        }
+
+        pub fn from_port_requirements(databus: P, reqs: &PortRequirements) -> Option<Self> {
+            if let Some(payload_size) = reqs.out {
+                if reqs.in_place {
+                    Some(Self::new(databus, payload_size, reqs.strict_alloc, reqs.consume_all))
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
         }
     }
 }

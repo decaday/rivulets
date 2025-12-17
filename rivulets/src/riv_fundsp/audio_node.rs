@@ -91,11 +91,8 @@ where
 
     fn get_port_requirements(&self) -> PortRequirements {
         let min = 1;
-        PortRequirements {
-            in_: Some(PayloadSize::new(min, self.config.prefer_items_per_process, false)),
-            out: Some(PayloadSize::new(min, self.config.prefer_items_per_process, false)),
-            in_place: None,
-        }
+        let size = PayloadSize::new(min, self.config.prefer_items_per_process);
+        PortRequirements::new_payload_to_payload(size, size, false, false)
     }
 
     async fn initialize(&mut self) -> Result<(), Self::Error> {
@@ -206,11 +203,10 @@ where
 
     fn get_port_requirements(&self) -> PortRequirements {
         let min = 1;
-        PortRequirements {
-            in_: None,
-            out: Some(PayloadSize::new(min, self.config.prefer_items_per_process, false)),
-            in_place: None,
-        }
+        PortRequirements::source(
+            PayloadSize::new(min, self.config.prefer_items_per_process),
+            false,
+        )
     }
 
     async fn initialize(&mut self) -> Result<(), Self::Error> {
@@ -312,11 +308,10 @@ where
 
     fn get_port_requirements(&self) -> PortRequirements {
         let min = 1;
-        PortRequirements {
-            in_: Some(PayloadSize::new(min, self.config.prefer_items_per_process, false)),
-            out: None,
-            in_place: None,
-        }
+        PortRequirements::sink(
+            PayloadSize::new(min, self.config.prefer_items_per_process),
+            false,
+        )
     }
 
     async fn initialize(&mut self) -> Result<(), Self::Error> {

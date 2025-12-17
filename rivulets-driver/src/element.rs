@@ -69,7 +69,7 @@ pub trait Element {
         T: Transformer<Item = Self::OutputItem>;
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ElementType {
     Source,
     Sink,

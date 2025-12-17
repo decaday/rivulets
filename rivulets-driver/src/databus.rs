@@ -17,9 +17,9 @@ impl Operation {
 
 pub trait Databus {
     type Item: Sized;
-    fn do_register_producer(&self, payload_size: PayloadSize);
-    fn do_register_consumer(&self, payload_size: PayloadSize) -> u8;
-    fn do_register_transformer(&self, payload_size: PayloadSize);
+    fn do_register_producer(&self, payload_size: PayloadSize, strict_alloc: bool);
+    fn do_register_consumer(&self, payload_size: PayloadSize, consume_all: bool) -> u8;
+    fn do_register_transformer(&self, payload_size: PayloadSize, strict_alloc: bool, consume_all: bool);
 }
 
 /// A trait for components from which data can be read asynchronously.

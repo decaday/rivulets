@@ -58,12 +58,14 @@ where
     ) -> Self {
         let min = 1;
         let preferred = config.prefer_items_per_process;
-        let exact = false;
+        let payload_size = PayloadSize::new(min, preferred);
+        let strict_alloc = false;
+        let consume_all = false;
 
         Self {
-            consumer_1: ConsumerHandle::new(databus_in_1.clone(), PayloadSize::new(min, preferred, exact)),
-            consumer_2: ConsumerHandle::new(databus_in_2.clone(), PayloadSize::new(min, preferred, exact)),
-            producer: ProducerHandle::new(databus_out, PayloadSize::new(min, preferred, exact)),
+            consumer_1: ConsumerHandle::new(databus_in_1.clone(), payload_size, consume_all),
+            consumer_2: ConsumerHandle::new(databus_in_2.clone(), payload_size, consume_all),
+            producer: ProducerHandle::new(databus_out, payload_size, strict_alloc),
             _format: format,
             config,
         }

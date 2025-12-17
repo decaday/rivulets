@@ -65,16 +65,28 @@ where
     async fn init(&mut self) -> Result<(), Self::Error> {
         self.element.initialize().await?;
         let reqs = self.element.get_port_requirements();
-        if let Some(payload_size) = reqs.in_ {
-            self.in_port = ConsumerHandle::new(self.databus_in.clone(), payload_size).in_port()
+
+        if let Some(_) = reqs.in_ {
+            self.in_port =
+                ConsumerHandle::from_port_requirements(self.databus_in.clone(), &reqs)
+                    .unwrap()
+                    .in_port();
         }
 
-        if let Some(payload_size) = reqs.out {
-            self.out_port = ProducerHandle::new(self.databus_out.clone(), payload_size).out_port()
-        }
-
-        if let Some(payload_size) = reqs.in_place {
-            self.in_place_port = TransformerHandle::new(self.databus_out.clone(), payload_size).in_place_port()
+        if let Some(_) = reqs.out {
+            if reqs.in_place {
+                self.in_place_port = TransformerHandle::from_port_requirements(
+                    self.databus_out.clone(),
+                    &reqs,
+                )
+                .unwrap()
+                .in_place_port();
+            } else {
+                self.out_port =
+                    ProducerHandle::from_port_requirements(self.databus_out.clone(), &reqs)
+                        .unwrap()
+                        .out_port();
+            }
         }
         Ok(())
     }

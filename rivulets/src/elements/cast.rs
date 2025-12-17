@@ -52,18 +52,8 @@ where
     }
 
     fn get_port_requirements(&self) -> PortRequirements {
-        PortRequirements::new_payload_to_payload(
-            PayloadSize {
-                min: 1,
-                preferred: self.config.prefer_items_per_process,
-                exact: false,
-            },
-            PayloadSize {
-                min: 1,
-                preferred: self.config.prefer_items_per_process,
-                exact: false,
-            },
-        )
+        let size = PayloadSize::new(1, self.config.prefer_items_per_process);
+        PortRequirements::new_payload_to_payload(size, size, false, true)
     }
 
     fn available(&self) -> u32 {

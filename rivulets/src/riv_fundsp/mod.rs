@@ -10,7 +10,7 @@ mod tests {
     use rivulets_driver::databus::{Consumer, Producer};
     use rivulets_driver::element::Element;
     use rivulets_driver::format::EmptyFormat;
-    use rivulets_driver::port::{InPort, PayloadSize};
+    use rivulets_driver::port::{InPlacePort, InPort, PayloadSize};
     use std::sync::Arc;
 
     // Helper to create a static slot for f32 data
@@ -19,7 +19,6 @@ mod tests {
     pub const DEFAULT_PAYLOAD_SIZE: PayloadSize = PayloadSize {
         min: 1,
         preferred: 64,
-        exact: false,
     };
 
     #[tokio::test]
@@ -31,14 +30,14 @@ mod tests {
         let mut element = FundspSourceElement::from_an(node, EmptyFormat, Config::default());
 
         // Setup output bus
-        let slot = Arc::new(TestSlot::new_static());
-        let producer = ProducerHandle::new(slot.clone(), DEFAULT_PAYLOAD_SIZE);
-        let consumer = ConsumerHandle::new(slot.clone(), DEFAULT_PAYLOAD_SIZE);
+        let test_slot = Arc::new(TestSlot::new_static());
+        let producer = ProducerHandle::new(test_slot.clone(), DEFAULT_PAYLOAD_SIZE, false);
+        let consumer = ConsumerHandle::new(test_slot.clone(), DEFAULT_PAYLOAD_SIZE, true);
         let mut out_port = producer.out_port();
 
         // Run process once
         element
-            .process(&InPort::new_none(), &mut out_port, &mut Default::default())
+            .process(&InPort::new_none(), &mut out_port, &mut InPlacePort::new_none())
             .await
             .unwrap();
 
@@ -62,9 +61,9 @@ mod tests {
         element.node.set_sample_rate(48000.0);
 
         // Setup output bus
-        let slot = Arc::new(TestSlot::new_static());
-        let producer = ProducerHandle::new(slot.clone(), DEFAULT_PAYLOAD_SIZE);
-        let consumer = ConsumerHandle::new(slot.clone(), DEFAULT_PAYLOAD_SIZE);
+        let test_slot = Arc::new(TestSlot::new_static());
+        let producer = ProducerHandle::new(test_slot.clone(), DEFAULT_PAYLOAD_SIZE, false);
+        let consumer = ConsumerHandle::new(test_slot.clone(), DEFAULT_PAYLOAD_SIZE, true);
         let mut out_port = producer.out_port();
 
         // Run process
@@ -113,13 +112,13 @@ mod tests {
         // Initialize Databuses (Slots)
         // Bus 1: Source -> Processor
         let slot1 = Arc::new(TestSlot::new_static());
-        let source_prod = ProducerHandle::new(slot1.clone(), DEFAULT_PAYLOAD_SIZE);
-        let proc_cons = ConsumerHandle::new(slot1.clone(), DEFAULT_PAYLOAD_SIZE);
+        let source_prod = ProducerHandle::new(slot1.clone(), DEFAULT_PAYLOAD_SIZE, false);
+        let proc_cons = ConsumerHandle::new(slot1.clone(), DEFAULT_PAYLOAD_SIZE, true);
 
         // Bus 2: Processor -> Verifier
         let slot2 = Arc::new(TestSlot::new_static());
-        let proc_prod = ProducerHandle::new(slot2.clone(), DEFAULT_PAYLOAD_SIZE);
-        let verify_cons = ConsumerHandle::new(slot2.clone(), DEFAULT_PAYLOAD_SIZE);
+        let proc_prod = ProducerHandle::new(slot2.clone(), DEFAULT_PAYLOAD_SIZE, false);
+        let verify_cons = ConsumerHandle::new(slot2.clone(), DEFAULT_PAYLOAD_SIZE, true);
 
         // Create Ports
         let mut source_out = source_prod.out_port();

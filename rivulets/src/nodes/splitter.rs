@@ -47,12 +47,14 @@ where
         
         let min = 1;
         let preferred = config.prefer_items_per_process;
-        let payload_size = PayloadSize::new(min, preferred, false);
+        let payload_size = PayloadSize::new(min, preferred);
+        let strict_alloc = false;
+        let consume_all = false;
 
         Self {
-            consumer: ConsumerHandle::new(databus_in, payload_size),
-            producer1: ProducerHandle::new(databus_out1, payload_size),
-            producer2: ProducerHandle::new(databus_out2, payload_size),
+            consumer: ConsumerHandle::new(databus_in, payload_size, consume_all),
+            producer1: ProducerHandle::new(databus_out1, payload_size, strict_alloc),
+            producer2: ProducerHandle::new(databus_out2, payload_size, strict_alloc),
             _format: in_format,
             config,
         }
