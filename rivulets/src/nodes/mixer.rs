@@ -7,8 +7,19 @@ use rivulets_driver::port::PayloadSize;
 
 use crate::databus::{ConsumerHandle, ProducerHandle};
 
-// Assuming StandardConfig is available at crate root as per your previous setup
-pub use crate::StandardConfig as Config;
+pub struct Config {
+    pub prefer_items_per_process: u16,
+    pub equicvalent_inputs: bool,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            prefer_items_per_process: 64,
+            equicvalent_inputs: true,
+        }
+    }
+}
 
 /// A node that mixes (sums) two input streams into one output stream.
 ///
@@ -60,7 +71,7 @@ where
         let preferred = config.prefer_items_per_process;
         let payload_size = PayloadSize::new(min, preferred);
         let strict_alloc = false;
-        let consume_all = false;
+        let consume_all = config.equicvalent_inputs;
 
         Self {
             consumer_1: ConsumerHandle::new(databus_in_1.clone(), payload_size, consume_all),
@@ -102,7 +113,12 @@ where
             let mut read_payload_1 = self.consumer_1.acquire_read(payload_len).await;
             let mut read_payload_2 = self.consumer_2.acquire_read(payload_len).await;
 
-            let process_len = read_payload_1.len().min(read_payload_2.len());
+            let process_len = if self.config.equicvalent_inputs {
+                assert_eq!(read_payload_1.len(), read_payload_2.len());
+                read_payload_1.len()
+            } else {
+                read_payload_1.len().min(read_payload_2.len())
+            };
 
             for ((&in1, &in2), out) in read_payload_1[..process_len].iter()
                 .zip(read_payload_2[..process_len].iter())
