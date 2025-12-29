@@ -2,6 +2,7 @@ use rivulets_driver::databus::{Databus, DatabusRef};
 use rivulets_driver::port::{PayloadSize, PortRequirements};
 
 pub mod slot;
+pub mod ring_buffer;
 
 pub use handles::{ConsumerHandle, ProducerHandle, TransformerHandle};
 pub use registry::{ParticipantRegistry, Registration};
