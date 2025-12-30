@@ -4,16 +4,24 @@ use core::cell::UnsafeCell;
 use core::future::poll_fn;
 use core::ops::Deref;
 use core::task::Poll;
+use core::mem::MaybeUninit;
 
 use portable_atomic::{AtomicU32, AtomicUsize, Ordering};
 
-use rivulets_driver::databus::{Consumer, Databus, Producer, Transformer};
-use rivulets_driver::payload::{Metadata, Position, ReadPayload, TransformPayload, WritePayload};
+use rivulets_driver::databus::{Consumer, Databus, Producer};
+use rivulets_driver::payload::{Metadata, Position, ReadPayload, WritePayload};
 use rivulets_driver::port::PayloadSize;
 
 use crate::storage::Storage;
+#[cfg(feature = "alloc")]
+use crate::storage::Heap;
+use crate::storage::Array;
 
-use super::{ConsumerHandle, ParticipantRegistry, ProducerHandle, TransformerHandle};
+use super::{ConsumerHandle, ParticipantRegistry, ProducerHandle};
+
+pub type StaticRingBuffer<T, const N: usize> = RingBuffer<Array<T, N>>;
+#[cfg(feature = "alloc")]
+pub type HeapRingBuffer<T> = RingBuffer<Heap<T>>;
 
 /// A zero-copy ring buffer implementation of Databus with side-channel metadata support.
 ///
@@ -159,6 +167,18 @@ impl<S: Storage> RingBuffer<S> {
     }
 }
 
+#[cfg(feature = "alloc")]
+impl<T> RingBuffer<Heap<T>> {
+    pub fn new_heap(capacity: usize) -> Self {
+        Self::new(Heap::new(capacity))
+    }
+}
+
+impl<T, const N: usize> RingBuffer<Array<T, N>> {
+    pub fn new_static() -> Self {
+        Self::new(Array::from(core::array::from_fn(|_| MaybeUninit::uninit())))
+    }
+}
 impl<S: Storage> Databus for RingBuffer<S> {
     type Item = S::Item;
 
@@ -241,6 +261,8 @@ where
                     len.min(free_space).min(contiguous)
                 };
 
+                // println!("DEBUG: Writing actual_len={}", actual_len);
+
                 let buffer_slice = unsafe { self.inner.storage.slice_mut(0..capacity) };
                 let buffer_ptr = buffer_slice.as_mut_ptr() as *mut S::Item;
                 
@@ -321,18 +343,224 @@ where
     }
 }
 
-impl<S, P> Transformer for TransformerHandle<RingBuffer<S>, P>
-where
-    S: Storage,
-    P: Deref<Target = RingBuffer<S>> + Clone,
-{
-    type Item = S::Item;
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::Array;
+    use std::sync::Arc;
+    use tokio::time::{timeout, Duration};
 
-    async fn acquire_transform<'a>(&'a self, _len: usize) -> TransformPayload<'a, Self> {
-        unimplemented!("RingBuffer: Transformer not implemented")
+    // Alias for easier test setup using static storage
+    type TestRing<const N: usize> = RingBuffer<Array<u8, N>>;
+
+    #[tokio::test]
+    async fn test_basic_produce_consume_strict() {
+        // Buffer size 16, chunk size 4. Strictly aligned.
+        let ring = Arc::new(TestRing::<16>::new_static());
+        
+        let producer = ProducerHandle::new(ring.clone(), PayloadSize::new(4, 4), true);
+        let consumer = ConsumerHandle::new(ring.clone(), PayloadSize::new(4, 4), true);
+
+        // Write strict chunk
+        let mut w_payload = producer.acquire_write(4).await;
+        w_payload[..].copy_from_slice(&[0xAA, 0xBB, 0xCC, 0xDD]);
+        w_payload.set_position(Position::Single);
+        w_payload.commit_all();
+        drop(w_payload);
+
+        // Read back
+        let mut r_payload = consumer.acquire_read(4).await;
+        assert_eq!(&r_payload[..], &[0xAA, 0xBB, 0xCC, 0xDD]);
+        
+        // Metadata position defaults to Single in commit_all if not specified otherwise
+        assert_eq!(r_payload.position(), Position::Single);
+        r_payload.commit_all();
     }
 
-    fn release_transform(&self, _metadata: Metadata, _transformed_len: usize) {
-        unimplemented!("RingBuffer: Transformer not implemented")
+    #[tokio::test]
+    async fn test_producer_wrap_around() {
+        // Capacity 8. Write 4 + 4 + 4. The third write wraps physically to index 0.
+        let ring = Arc::new(TestRing::<8>::new_static());
+        
+        let producer = ProducerHandle::new(ring.clone(), PayloadSize::new(4, 4), true);
+        let consumer = ConsumerHandle::new(ring.clone(), PayloadSize::new(4, 4), true);
+
+        // Fill buffer
+        for i in 0..2 {
+            let mut w = producer.acquire_write(4).await;
+            w.fill(i as u8);
+            w.commit_all();
+        }
+
+        // Drain first 4 bytes
+        let mut r = consumer.acquire_read(4).await;
+        assert_eq!(r[0], 0);
+        r.commit_all();
+        drop(r);
+
+        // Write causing wrap-around
+        let mut w = producer.acquire_write(4).await;
+        w.fill(2); // Should physically be at index 0..4
+        w.commit_all();
+        drop(w);
+
+        // Read remaining
+        let mut r2 = consumer.acquire_read(4).await;
+        assert_eq!(r2[0], 1);
+        r2.commit_all();
+        drop(r2);
+
+        let mut r3 = consumer.acquire_read(4).await;
+        assert_eq!(r3[0], 2);
+        r3.commit_all();
+    }
+
+    #[tokio::test]
+    async fn test_backpressure_full_buffer() {
+        let ring = Arc::new(TestRing::<4>::new_static());
+        
+        let producer = ProducerHandle::new(ring.clone(), PayloadSize::new(4, 4), true);
+        let consumer = ConsumerHandle::new(ring.clone(), PayloadSize::new(4, 4), true);
+
+        // Fill buffer
+        let mut w = producer.acquire_write(4).await;
+        w.commit_all();
+        drop(w);
+
+        // Second write should block until consumer reads
+        let producer_task = tokio::spawn(async move {
+            let mut w = producer.acquire_write(4).await;
+            w[0] = 0xFF;
+            w.commit_all();
+        });
+
+        // Ensure producer is actually blocked
+        tokio::task::yield_now().await;
+        assert!(!producer_task.is_finished());
+
+        // Consume to free space
+        let mut r = consumer.acquire_read(4).await;
+        r.commit_all();
+        drop(r);
+
+        // Producer should complete now
+        timeout(Duration::from_millis(100), producer_task)
+            .await
+            .expect("Producer did not wake up after consume")
+            .unwrap();
+
+        // Verify new data
+        let r_new = consumer.acquire_read(4).await;
+        assert_eq!(r_new[0], 0xFF);
+    }
+
+    #[tokio::test]
+    async fn test_multiple_consumers_slowest_reader() {
+        let ring = Arc::new(TestRing::<8>::new_static());
+        
+        let producer = ProducerHandle::new(ring.clone(), PayloadSize::new(4, 4), true);
+        let fast_consumer = ConsumerHandle::new(ring.clone(), PayloadSize::new(4, 4), true);
+        let slow_consumer = ConsumerHandle::new(ring.clone(), PayloadSize::new(4, 4), true);
+
+        // Write 1: Occupy 0..4
+        let mut w1 = producer.acquire_write(4).await;
+        w1.commit_all();
+        drop(w1);
+
+        // Write 2: Occupy 4..8 (Buffer Full)
+        let mut w2 = producer.acquire_write(4).await;
+        w2.commit_all();
+        drop(w2);
+
+        // Fast consumer reads everything
+        fast_consumer.acquire_read(4).await.commit_all();
+        fast_consumer.acquire_read(4).await.commit_all();
+
+        // Producer should still be blocked because slow_consumer hasn't read 0..4 yet
+        let try_write = tokio::spawn(async move {
+             producer.acquire_write(4).await.commit_all();
+        });
+
+        tokio::task::yield_now().await;
+        assert!(!try_write.is_finished(), "Producer overwrote unread data from slow consumer");
+
+        // Slow consumer advances
+        slow_consumer.acquire_read(4).await.commit_all();
+
+        // Now producer can proceed (overwriting 0..4)
+        timeout(Duration::from_millis(100), try_write)
+            .await
+            .expect("Producer failed to acquire after slow consumer read")
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_packet_assembly_and_boundary_truncation() {
+        let ring = Arc::new(TestRing::<16>::new_static());
+        let producer = ProducerHandle::new(ring.clone(), PayloadSize::new(4, 4), false);
+        let consumer = ConsumerHandle::new(ring.clone(), PayloadSize::new(4, 4), true);
+
+        // Test valid packet merging (First + Last -> Single)
+        
+        // Write "Start"
+        let mut w1 = producer.acquire_write(4).await;
+        w1.set_position(Position::First);
+        w1.commit(4);
+        drop(w1);
+
+        // Write "End"
+        let mut w2 = producer.acquire_write(4).await;
+        w2.set_position(Position::Last);
+        w2.commit(4);
+        drop(w2);
+
+        // Verify: Consumer sees one contiguous "Single" packet
+        let mut r = consumer.acquire_read(8).await;
+        assert_eq!(r.len(), 8);
+        assert_eq!(r.position(), Position::Single);
+        r.commit_all();
+        drop(r);
+
+        // Test Read Truncation
+        // Verify that reading assumes packet boundaries even if requested length is larger.
+
+        // Write a standard Single packet (4 bytes)
+        let mut w3 = producer.acquire_write(4).await;
+        w3.set_position(Position::Single);
+        w3.commit(4);
+        drop(w3);
+
+        // Action: Request 10 bytes
+        // Expectation: RingBuffer limits the read to the packet size (4 bytes)
+        let mut r2 = consumer.acquire_read(10).await;
+        
+        assert_eq!(r2.len(), 4, "Read should be truncated at the packet boundary");
+        assert_eq!(r2.position(), Position::Single);
+        r2.commit_all();
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "strict_alloc requires buffer length")]
+    async fn test_strict_alloc_panic_on_misalignment() {
+        // Buffer 10 is not multiple of chunk 4
+        let ring = Arc::new(TestRing::<10>::new_static());
+        ProducerHandle::new(ring, PayloadSize::new(4, 4), true);
+    }
+
+    #[tokio::test]
+    async fn test_non_strict_variable_length_writes() {
+        let ring = Arc::new(TestRing::<16>::new_static());
+        let producer = ProducerHandle::new(ring.clone(), PayloadSize::new(4, 4), false);
+        let consumer = ConsumerHandle::new(ring.clone(), PayloadSize::new(4, 4), true);
+
+        // Write 3 bytes
+        let mut w = producer.acquire_write(3).await;
+        assert_eq!(w.len(), 3);
+        w.commit(3);
+        drop(w);
+
+        let mut r = consumer.acquire_read(10).await;
+        assert_eq!(r.len(), 3);
+        r.commit_all();
     }
 }
